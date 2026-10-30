@@ -6,6 +6,7 @@ Usage:
                            (default: the agents found here; or name them, or "all")
   doneguard check [files]  run the checks on the given files (default: git changes); exit 1 on failure
   doneguard stats          how many "done" claims were blocked, and how many the agents fixed
+  doneguard --version      the installed version
   doneguard start          hook, session start: mark the time
   doneguard verify         hook, agent stop: check the files changed since the mark; on failure the
                            errors go back to the agent so it keeps working (gives up after 3 tries)
@@ -854,6 +855,13 @@ def main(argv=None):
         return init(Path.cwd().resolve(), argv[1:])
     if cmd == "stats":
         return stats()
+    if cmd in ("--version", "-V", "version"):
+        try:
+            from importlib.metadata import version
+            print(f"doneguard {version('doneguard')}")
+        except ImportError:  # PackageNotFoundError too: run from a checkout, not installed
+            print("doneguard (not installed: run from source)")
+        return 0
     if cmd == "check":
         root = find_root(Path.cwd().resolve())
         files = [str(Path(a).resolve()) for a in argv[1:]] or git_changed(root)

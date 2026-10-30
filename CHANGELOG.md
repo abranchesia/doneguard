@@ -1,0 +1,38 @@
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+- `doneguard --version`.
+
+## [0.2.0] - 2026-10-30
+
+### Added
+
+- **Throwaway databases for tests.** New modes `postgres`, `mysql`, `redis` and `mongo` (optionally `=<image>`). The database starts in Docker right before the first check below it that runs. `DATABASE_URL`, same-kind URLs from `.env` files and the shell, and the URL variables the ORM config reads are pointed at it. Then the migrate and seed command runs with `NODE_ENV=test`, and the container is removed at the end (or after 15 minutes if the run is killed).
+- **`e2e` mode with evidence.** Playwright runs with a wrapper config that keeps a screenshot and a video of every test, plus traces of failures, in `.doneguard/evidence/`. The last 10 runs are kept. Failures point the agent at the failure screenshot and the page snapshot. `{evidence}` works with any other runner.
+- `init` detects databases from dependencies, the Prisma provider and `docker-compose` images. It writes the migrate and seed command for Prisma, Drizzle, Knex, npm scripts, Alembic and Rails, but only when the connection goes through a variable it redirects. Database rows go last.
+- New stacks: Ruby (rubocop, rspec, `rails test`), `go test`, Gradle, .NET, Pest and PHPUnit, Deno, Biome, pytest-playwright.
+- `{test_dirs}` placeholder for runners that take folders.
+- `doneguard check` prints a progress line per check.
+- Skips (Docker off, missing browsers, a dev server holding the port) are shown in Claude Code.
+- With a `.doneguard.conf` that already has checks, `init` lists the detections it doesn't have yet.
+- Published on PyPI: `uv tool install doneguard`.
+
+### Changed
+
+- `.doneguard.conf` is written with aligned columns.
+- A failing check shows the end of its output plus its first error line, with Playwright's attachment noise removed.
+
+## [0.1.0] - 2026-10-30
+
+### Added
+
+- Stop hook for Claude Code, Cursor, Codex, Gemini CLI, Copilot, Antigravity, Devin, Kiro, OpenCode and Aider.
+- `doneguard check` for CI and git hooks, and `doneguard stats`.
+- Detection for TypeScript, ESLint, Vitest, Jest, Python (ruff, pytest), Rust, Go, Java (Maven), PHP and Swift.
+
+[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/abranchesia/doneguard/releases/tag/v0.2.0
+[0.1.0]: https://github.com/abranchesia/doneguard/commit/42ef2b2

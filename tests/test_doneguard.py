@@ -386,3 +386,8 @@ def test_detect_ignores_comments_odd_images_and_keeps_databases_last(tmp_path):
     assert "redis" not in modes and modes.count("postgres") == 1
     assert modes.index("postgres") > max(i for i, c in enumerate(checks) if c[3].startswith("go "))
     assert ("*.rb", ".", "tests", "bundle exec rspec {tests}") in checks
+
+
+def test_version_never_fails(capsys):
+    assert doneguard.main(["--version"]) == 0
+    assert capsys.readouterr().out.startswith("doneguard ")

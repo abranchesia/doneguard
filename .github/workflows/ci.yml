@@ -7,9 +7,6 @@ jobs:
       matrix:
         python: ["3.9", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-      - run: pip install pytest
-      - run: pytest -q
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uvx --python ${{ matrix.python }} pytest -q

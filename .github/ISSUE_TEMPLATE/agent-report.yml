@@ -1,0 +1,34 @@
+name: Agent report
+description: How doneguard behaved with your coding agent (it worked, or it didn't)
+labels: [agent-report]
+body:
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options: [Cursor (IDE), Cursor CLI, OpenAI Codex CLI, Gemini CLI, GitHub Copilot CLI, GitHub Copilot in VS Code, Google Antigravity, Devin Local, Kiro CLI, OpenCode, Aider, Claude Code, Other]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Agent version and doneguard version
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - "It worked: a failing check kept the agent working, and it stopped once the checks passed"
+        - "The hook never ran"
+        - "The hook ran, but the agent stopped anyway"
+        - "The agent kept going, but never stopped"
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What you asked the agent, what it did, and any hook output or error. Recordings and screenshots are welcome.

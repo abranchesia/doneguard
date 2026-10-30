@@ -1,0 +1,22 @@
+name: New stack
+description: Ask doneguard init to detect a language, framework, test runner or database
+labels: [stack]
+body:
+  - type: input
+    id: stack
+    attributes:
+      label: Stack
+      placeholder: e.g. Elixir with ExUnit, Bun, SQL Server
+    validations:
+      required: true
+  - type: textarea
+    id: detect
+    attributes:
+      label: How to recognise it
+      description: Files or dependencies that mark a project using it (mix.exs, bun.lockb…).
+  - type: textarea
+    id: check
+    attributes:
+      label: The command that checks it
+      description: How you'd run it on changed files only, and a sample of its error output.
+      render: text

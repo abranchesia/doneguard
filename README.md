@@ -228,7 +228,7 @@ jobs:
   doneguard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - run: npm ci                  # install your project's tools
@@ -378,7 +378,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 
 ## Contributing
 
-Small on purpose: one file, standard library only. New stack detections, agent adapters and reports from agents marked 🧪 are welcome.
+Small on purpose: one file, standard library only. New stack detections, agent adapters and reports from agents marked 🧪 are welcome: see [CONTRIBUTING.md](https://github.com/abranchesia/doneguard/blob/main/CONTRIBUTING.md). What changed in each version: [CHANGELOG.md](https://github.com/abranchesia/doneguard/blob/main/CHANGELOG.md).
 
 ```bash
 uvx pytest            # run the tests

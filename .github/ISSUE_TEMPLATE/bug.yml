@@ -1,0 +1,29 @@
+name: Bug
+description: doneguard did something wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command or the agent session, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: conf
+    attributes:
+      label: Your .doneguard.conf
+      render: text
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: The output of `doneguard check` on the same files, if you can run it.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      description: "`doneguard --version`, your OS, and the agent and its version if one was involved"
+    validations:
+      required: true
