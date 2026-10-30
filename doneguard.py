@@ -837,7 +837,7 @@ def init(root, names=()):
             continue
         print(f"  {agent:<12} {file}" + (f" ({note})" if note else ""))
     if not shutil.which("doneguard"):
-        print("warning: `doneguard` is not on your PATH, so the hooks can't run. Install it: uv tool install git+https://github.com/abranchesia/doneguard")
+        print("warning: `doneguard` is not on your PATH, so the hooks can't run. Install it: uv tool install doneguard")
     return 0
 
 

@@ -87,10 +87,12 @@ sequenceDiagram
 ## Install
 
 ```bash
-uv tool install git+https://github.com/abranchesia/doneguard
-# or: pipx install git+https://github.com/abranchesia/doneguard
+uv tool install doneguard
+# or: pipx install doneguard
 doneguard --help
 ```
+
+Want to try it first? `uvx doneguard init`, then `uvx doneguard check`, runs it without installing. The agent hooks need it installed, since they call `doneguard` by name.
 
 If your shell can't find `doneguard` afterwards, run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal. The hooks call `doneguard` by name, so it has to be on your `PATH`.
 
@@ -228,7 +230,7 @@ jobs:
           fetch-depth: 0
       - run: npm ci                  # install your project's tools
       - run: npx playwright install --with-deps chromium   # if you have e2e tests
-      - run: pipx install git+https://github.com/abranchesia/doneguard
+      - run: pipx install doneguard
       - run: doneguard check $(git diff --name-only origin/${{ github.base_ref }}...HEAD)
 ```
 
