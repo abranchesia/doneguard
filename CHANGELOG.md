@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- A `secrets` group in `cheats`: AWS, Anthropic, OpenAI, Stripe, GitHub, Slack and Google keys, and private keys, added in the session to a file git would commit. They're shown cut short, so the key doesn't spread to the agent's transcript or a PR comment. `init` adds the group to new projects. In an existing `.doneguard.conf`, add `secrets` to the `cheats` line (a line with `-` already has it); `init --update` leaves that line as it is.
+- README FAQ: why not a hand-written stop hook.
+
 ### Changed
 
 - Codex CLI and GitHub Copilot CLI are tested end to end in real sessions (✅), with recordings in the README.

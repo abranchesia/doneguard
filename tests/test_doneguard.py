@@ -433,6 +433,16 @@ def test_cheat_groups_can_be_turned_off(tmp_path):
     assert doneguard.run_checks(root, [str(root / "a.ts")], ref=ref, flagged=set())[0] == []
 
 
+def test_secrets_are_flagged_but_never_printed(tmp_path):
+    root = project(tmp_path / "p", "* | . | cheats | secrets\n")
+    ref = repo(root, {"config.py": ""})
+    key = "sk-ant-api03-" + "x" * 40
+    (root / "config.py").write_text(f'KEY = "{key}"\nAWS = "AKIAIOSFODNN7EXAMPLE"\nTASK = "risk-assessment-for-the-quarterly-board-review"\n')
+    ((_, report),), _, _ = doneguard.run_checks(root, [str(root / "config.py")], ref=ref, flagged=set())
+    assert "config.py:1  sk-ant-api…" in report and "config.py:2  AKIAIOSFOD…" in report
+    assert key not in report and "config.py:3" not in report
+
+
 def test_new_errors_in_untouched_files_count_old_ones_dont(tmp_path):
     out = tmp_path / "out.txt"
     out.write_text("src/old.ts(1,1): error TS1: old\n")
@@ -498,6 +508,13 @@ def test_init_update_puts_each_new_check_where_it_works(tmp_path, capsys):
     assert (tmp_path / doneguard.CONF).read_text().startswith("# my checks\n")
     doneguard.init(tmp_path, ["--update", "claude"])
     assert len(doneguard.load_conf(tmp_path)) == 5
+
+
+def test_init_update_keeps_one_cheats_line_whatever_groups_it_lists(tmp_path, capsys):
+    (tmp_path / "tsconfig.json").write_text("{}")
+    (tmp_path / doneguard.CONF).write_text("* | . | cheats | skips\n")
+    doneguard.init(tmp_path, ["--update", "claude"])
+    assert [r[2] for r in doneguard.load_conf(tmp_path)].count("cheats") == 1
 
 
 def test_doctor_says_when_a_new_version_is_out(tmp_path, monkeypatch, capsys):

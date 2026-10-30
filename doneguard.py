@@ -31,9 +31,10 @@ The hooks read the event JSON on stdin and answer in each agent's format.
            tests    replace {tests} (or {test_dirs}) with the tests related to the changed files;
                     skip if none
            command  run `command`; fail on non-zero exit
-           cheats   fail on lines added this session that skip tests, silence checkers or use any,
-                    and on deleted tests; `command` lists the groups: skips, silencers, any,
-                    deleted-tests (- for all). Each one is flagged once; `check` only reports them.
+           cheats   fail on lines added this session that skip tests, silence checkers, use any or
+                    hardcode secrets, and on deleted tests; `command` lists the groups: skips,
+                    silencers, any, secrets, deleted-tests (- for all). Each one is flagged once;
+                    `check` only reports them.
            e2e      run `command` and keep screenshots, videos and traces in .doneguard/evidence/
                     ({evidence} is that run's folder); fail on non-zero exit
            postgres, mysql, redis, mongo (optionally =<image>)
@@ -106,11 +107,15 @@ CHEATS = {
         r"@ts-(?:ignore|nocheck|expect-error)|eslint-disable|biome-ignore|#\s*type:\s*ignore|#\s*noqa|pylint:\s*disable"
         r"|pyright:\s*ignore|//\s*nolint|#!?\[allow\(|@SuppressWarnings|rubocop:disable|@phpstan-ignore|@psalm-suppress|swiftlint:disable"),
     "any": re.compile(r"\bas\s+any\b|:\s*any\b(?!\s*[A-Za-z_])|<any>"),  # only in TypeScript files
+    "secrets": re.compile(  # keys that look real, in files git would commit (.gitignore'd ones aren't checked)
+        r"\bAKIA[0-9A-Z]{16}\b|\bsk-(?:ant-|proj-)?[\w-]{32,}|\b[rs]k_live_[0-9A-Za-z]{20,}|\bgh[pousr]_[0-9A-Za-z]{36}\b"
+        r"|\bgithub_pat_\w{60,}|\bxox[abpr]-[0-9A-Za-z-]{10,}|\bAIza[\w-]{35}|-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----"),
 }
 WHY = {
     "skips": "skips or focuses a test: that hides the failure instead of fixing it",
     "silencers": "silences the checker: fix what it reports instead",
     "any": "types it as any: give it its real type",
+    "secrets": "hardcodes a secret: read it from an environment variable",
     "deleted-tests": "deletes a test file: a failing test gets fixed, not removed",
 }
 CITES_FILE = re.compile(r"[\w./@-]+\.\w+(?:\(\d+|:\[?\d+)")  # a file position: a.ts(3,1), ./a.go:3:2, A.java:[5,9]
@@ -339,14 +344,15 @@ def added_lines(root, ref, rels):
 
 
 def find_cheats(root, ref, files, groups):
-    """[(path, line, group, what)]: added lines that skip tests, silence checkers or use any, and deleted tests."""
+    """[(path, line, group, what)]: added lines that skip tests, silence checkers, use any or hardcode secrets, and
+    deleted tests. A secret is cut short, so it doesn't spread to the agent's transcript or a PR comment."""
     found = []
     for path, lines in added_lines(root, ref, [os.path.relpath(f, root) for f in files]).items():
         for n, text in lines:
             for g, rx in CHEATS.items():
                 m = rx.search(text) if g in groups and (g != "skips" or is_test(path)) and (g != "any" or path.endswith((".ts", ".tsx", ".mts", ".cts"))) else None
                 if m:
-                    found.append((path, n, g, m.group(0).strip()))
+                    found.append((path, n, g, m.group(0)[:10] + "…" if g == "secrets" else m.group(0).strip()))
     if "deleted-tests" in groups:
         gone = (git(root, "diff", "--name-only", "--relative", "--diff-filter=D", ref) or "").splitlines()
         found += [(p, 0, "deleted-tests", "deleted") for p in gone if is_test(p)]
@@ -445,7 +451,7 @@ def run_checks(root, files, say=None, ref=None, known=None, flagged=None):
                     lines = [f"{p}{f':{n}' if n else ''}  {what}  {WHY[g]}" for p, n, g, what in found]
                     if new:
                         flagged.update(f"{c[0]}:{c[3]}" for c in found)
-                        fails.append(("cheats", f"[{os.path.relpath(base, root)}] cheats: changes that hide failures instead of fixing them\n" + "\n".join(lines[:20])
+                        fails.append(("cheats", f"[{os.path.relpath(base, root)}] cheats: changes that hide failures or leak secrets\n" + "\n".join(lines[:20])
                                       + "\nRemove them and fix the cause. If one really has to stay, keep it and tell the user why in your final answer: doneguard flags each one only once."))
                     elif found:
                         notes.append(("kept after being told: " if flagged is not None else "cheats: ") + "; ".join(lines[:5]))
@@ -852,7 +858,7 @@ def detect(root, notes=None):
     if found("Package.swift"):
         checks.append(("*.swift", at("Package.swift"), "filter", "swift build 2>&1 | grep 'error:'"))
     # Agents that "pass" by skipping a test or silencing the checker get caught too, whatever the stack.
-    return [("*", ".", "cheats", "skips,silencers,any,deleted-tests")] * bool(checks or late) + checks + late
+    return [("*", ".", "cheats", "skips,silencers,any,secrets,deleted-tests")] * bool(checks or late) + checks + late
 
 
 def installed_version():
@@ -1084,8 +1090,8 @@ def init(root, names=()):
     notes = []
     checks, conf = detect(root, notes), load_conf(root)
     if conf:
-        have = {(r[2], r[3]) for r in conf}
-        shown = [c for c in checks if (c[2], c[3]) not in have]
+        have = {(r[2], "" if r[2] == "cheats" else r[3]) for r in conf}  # one cheats line, whatever groups it lists
+        shown = [c for c in checks if (c[2], "" if c[2] == "cheats" else c[3]) not in have]
         if update and shown:
             add_checks(root, checks, shown)
             print(f"added {len(shown)} check(s) to {CONF}, each in its place:")

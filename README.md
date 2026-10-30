@@ -22,7 +22,7 @@ doneguard is a **stop hook**. When the agent tries to finish, doneguard runs you
 
 - **Tests that need a database?** doneguard starts a throwaway Postgres, MySQL, Redis or MongoDB in Docker, migrates and seeds it, points `DATABASE_URL` at it, runs the tests and removes it. Your real database stays out of it.
 - **Playwright or Cypress in the project?** It runs the end-to-end tests in a real browser and keeps a screenshot and a video of every test in `.doneguard/evidence/`. When one fails, the agent gets the error, the failure screenshot and a snapshot of the page.
-- **Agent skipped the test instead of fixing it?** A `test.skip`, an `@ts-ignore`, an `as any` or a deleted test file added in the session is sent back too: [no shortcuts](#no-shortcuts).
+- **Agent skipped the test instead of fixing it?** A `test.skip`, an `@ts-ignore`, an `as any`, a hardcoded API key or a deleted test file added in the session is sent back too: [no shortcuts](#no-shortcuts).
 - **Broke a file it never opened?** New type errors anywhere in the project count, while the old ones never block anyone.
 
 - [Works with your agent](#works-with-your-agent)
@@ -259,17 +259,18 @@ Any other runner works too: put `{evidence}` in the command and doneguard replac
 
 ## No shortcuts
 
-An agent that can't get a test to pass will sometimes make the check pass instead. `init` adds a `cheats` line that sends back what was **added in the session**:
+An agent that can't get a test to pass will sometimes make the check pass instead, and one that needs an API key will sometimes paste it straight into the code. `init` adds a `cheats` line that sends back what was **added in the session**:
 
 | Group | Catches |
 |---|---|
 | `skips` | `test.skip`, `.only`, `xit`, `@pytest.mark.skip`/`xfail`, `t.Skip()`, `#[ignore]`, `@Disabled`, `markTestSkipped`… in test files |
 | `silencers` | `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `biome-ignore`, `# type: ignore`, `# noqa`, `//nolint`, `#[allow(…)]`, `@SuppressWarnings`, `rubocop:disable`… |
 | `any` | `as any`, `: any` in TypeScript |
+| `secrets` | AWS, Anthropic, OpenAI, Stripe, GitHub, Slack and Google keys, and private keys, in files git would commit (your gitignored `.env` isn't checked). Shown cut short, never whole |
 | `deleted-tests` | test files deleted in the session |
 
 ```text
-[.] cheats: changes that hide failures instead of fixing them
+[.] cheats: changes that hide failures or leak secrets
 src/cart.test.ts:7  test.skip  skips or focuses a test: that hides the failure instead of fixing it
 ```
 
@@ -451,6 +452,8 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 ## FAQ
 
 **Do I need Claude Code?** No. See [Works with your agent](#works-with-your-agent). Without any agent, `doneguard check` works in CI and git hooks.
+
+**Why not write my own stop hook that runs lint and tsc?** The usual hand-written one has three gaps. It lets the second stop through (`stop_hook_active`), so the agent's fix is never checked. It fails on errors that were already in the project, so a legacy repo never passes. And it only sees files changed through the edit tool, so it misses `sed`, codegen and scripts. doneguard checks again after every fix (up to 3 tries), counts only new errors, compares modification times, and also runs the related tests, a throwaway database and the e2e suite, in each agent's own hook format.
 
 **Does it slow the agent down?** It runs once, when the agent tries to stop, and only the checks that match the changed files. Usually a few seconds.
 
