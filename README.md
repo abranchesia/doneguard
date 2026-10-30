@@ -50,7 +50,7 @@ Not using Claude Code? doneguard speaks each agent's own hook format. `doneguard
 | **OpenCode** | plugin on `session.idle` → new prompt | ⚗️ experimental |
 | **Cline, Windsurf Cascade, anything else** | a rule: *"run `doneguard check` before saying done"* | manual |
 
-✅ the GIF above. 🧪 built from the agent's official hook docs and tested against its documented payloads. ⚗️ experimental. If one misbehaves with your version, please open an issue.
+✅ the GIF above. 🧪 built from the agent's official hook docs and tested against its documented payloads. ⚗️ experimental. Using one of them? Tell how it went, worked or not, in an [agent report](https://github.com/abranchesia/doneguard/issues/new?template=agent-report.yml): that's what turns 🧪 into ✅.
 
 Cursor, Copilot and Devin also run the hooks in `.claude/`. When Claude Code is hooked too, `init` doesn't add theirs, so nothing runs twice.
 
@@ -345,6 +345,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 | `doneguard init [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet, otherwise list what's new) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
 | `doneguard check [files…]` | Run the checks on the given files, or on your git changes, with a progress line per check. Exit 1 on failure. |
 | `doneguard stats` | How many "done" claims were blocked, and how many the agents fixed. |
+| `doneguard --version` | The installed version. |
 | `doneguard start` | Hook: mark the start of a session (reads the event JSON on stdin). |
 | `doneguard verify` | Hook: check the files changed since the mark and answer in the agent's format. |
 
@@ -378,7 +379,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 
 ## Contributing
 
-Small on purpose: one file, standard library only. New stack detections, agent adapters and reports from agents marked 🧪 are welcome: see [CONTRIBUTING.md](https://github.com/abranchesia/doneguard/blob/main/CONTRIBUTING.md). What changed in each version: [CHANGELOG.md](https://github.com/abranchesia/doneguard/blob/main/CHANGELOG.md).
+Small on purpose: one file, standard library only. New stack detections, agent adapters and reports from agents marked 🧪 are welcome: see [CONTRIBUTING.md](https://github.com/abranchesia/doneguard/blob/main/CONTRIBUTING.md). What changed in each version: [CHANGELOG.md](https://github.com/abranchesia/doneguard/blob/main/CHANGELOG.md) and [Releases](https://github.com/abranchesia/doneguard/releases). Found a bug? [Open one](https://github.com/abranchesia/doneguard/issues/new?template=bug.yml) with your `doneguard --version`.
 
 ```bash
 uvx pytest            # run the tests
