@@ -22,12 +22,14 @@ doneguard is a **stop hook**. When the agent tries to finish, doneguard runs you
 
 - **Tests that need a database?** doneguard starts a throwaway Postgres, MySQL, Redis or MongoDB in Docker, migrates and seeds it, points `DATABASE_URL` at it, runs the tests and removes it. Your real database stays out of it.
 - **Playwright or Cypress in the project?** It runs the end-to-end tests in a real browser and keeps a screenshot and a video of every test in `.doneguard/evidence/`. When one fails, the agent gets the error, the failure screenshot and a snapshot of the page.
+- **Agent skipped the test instead of fixing it?** A `test.skip`, an `@ts-ignore`, an `as any` or a deleted test file added in the session is sent back too: [no shortcuts](#no-shortcuts).
+- **Broke a file it never opened?** New type errors anywhere in the project count, while the old ones never block anyone.
 
 - [Works with your agent](#works-with-your-agent)
 - [How it works](#how-it-works)
 - [Install](#install)
 - [Add it to an existing project](#add-it-to-an-existing-project) · [Start from zero](#start-a-new-project-from-zero)
-- [Tests that need a database](#tests-that-need-a-database) · [End-to-end tests with evidence](#end-to-end-tests-with-evidence)
+- [Tests that need a database](#tests-that-need-a-database) · [End-to-end tests with evidence](#end-to-end-tests-with-evidence) · [No shortcuts](#no-shortcuts)
 - [Without hooks: CI, git hooks, any agent](#without-hooks-ci-git-hooks-any-agent)
 - [Stats](#stats) · [Day to day](#day-to-day) · [Teams](#teams)
 - [Stacks](#what-init-detects) · [Configuration](#configuration) · [Commands](#commands) · [FAQ](#faq)
@@ -81,7 +83,7 @@ sequenceDiagram
 1. **`doneguard init`** looks at your project, writes the checks to `.doneguard.conf` and registers two hooks in your agent's config.
 2. **Session starts:** the agent runs `doneguard start`, which notes the time.
 3. **The agent says it's done:** before letting it stop, the agent runs `doneguard verify`.
-4. **verify** lists the files modified since the mark (respecting `.gitignore`), runs only the checks whose globs match them, and only the tests related to them. If a database is needed, it starts one in Docker first and removes it at the end. End-to-end runs leave their evidence in `.doneguard/evidence/`.
+4. **verify** lists the files modified since the mark (respecting `.gitignore`), runs only the checks whose globs match them, and only the tests related to them. If a database is needed, it starts one in Docker first and removes it at the end. End-to-end runs leave their evidence in `.doneguard/evidence/`. Whole-project checks like `tsc` count errors in the changed files plus any error that wasn't there at the mark (doneguard notes those in the background when the session starts), so a broken caller in another file is caught and old errors aren't.
 5. **Something fails:** the errors go back to the agent in its own format and it keeps working. **Everything passes:** the agent stops and the mark moves forward.
 6. **Safety valve:** after 3 failed attempts in a row, doneguard lets the agent stop and tells you, so it never loops forever.
 
@@ -97,6 +99,7 @@ doneguard --help
 
 - **Try it without installing:** `uvx doneguard init`, then `uvx doneguard check`. The agent hooks call `doneguard` by name, so for them it has to be installed and on your `PATH`.
 - **Shell can't find `doneguard`?** Run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal.
+- **A check isn't running?** `doneguard doctor` lists what each check needs (tools, Docker, browsers, hooks) and what's missing.
 - **Upgrade:** `uv tool upgrade doneguard` (or `pipx upgrade doneguard`).
 
 Requirements: Python 3.9+ (only to run doneguard itself), macOS or Linux, and the tools your checks call (`tsc`, `ruff`, `cargo`…) installed in the project. git is optional; with it, change detection respects `.gitignore`. Docker is optional, for [test databases](#tests-that-need-a-database). Playwright browsers are optional, for [end-to-end tests](#end-to-end-tests-with-evidence).
@@ -216,9 +219,30 @@ Any other runner works too: put `{evidence}` in the command and doneguard replac
 *.tsx,*.css            | . | e2e | npx --no -- start-server-and-test dev http://localhost:3000 'cypress run --config screenshotsFolder={evidence}/screenshots,videosFolder={evidence}/videos,video=true'
 ```
 
+## No shortcuts
+
+An agent that can't get a test to pass will sometimes make the check pass instead. `init` adds a `cheats` line that sends back what was **added in the session**:
+
+| Group | Catches |
+|---|---|
+| `skips` | `test.skip`, `.only`, `xit`, `@pytest.mark.skip`/`xfail`, `t.Skip()`, `#[ignore]`, `@Disabled`, `markTestSkipped`… in test files |
+| `silencers` | `@ts-ignore`, `@ts-expect-error`, `eslint-disable`, `biome-ignore`, `# type: ignore`, `# noqa`, `//nolint`, `#[allow(…)]`, `@SuppressWarnings`, `rubocop:disable`… |
+| `any` | `as any`, `: any` in TypeScript |
+| `deleted-tests` | test files deleted in the session |
+
+```text
+[.] cheats: changes that hide failures instead of fixing them
+src/cart.test.ts:7  test.skip  skips or focuses a test: that hides the failure instead of fixing it
+```
+
+- **Only what the agent added.** doneguard compares against a git snapshot taken when the session starts (`git stash create`, which touches nothing), so the skips and ignores already in your code don't count.
+- **Each one is flagged once.** If the agent keeps it, it has to say why in its final answer, and doneguard lets it stop and tells you (Claude Code shows it).
+- **`doneguard check`** lists them without failing: they're aimed at agents, not at the `eslint-disable` you wrote on purpose.
+- Some of them are fine in your project? Drop the group from the line: `* | . | cheats | skips,deleted-tests`.
+
 ## Without hooks: CI, git hooks, any agent
 
-`doneguard check` runs the same checks on your git changes (or on the files you pass), one progress line per check, and exits 1 on failure. No agent needed. The GIF in [End-to-end tests](#end-to-end-tests-with-evidence) shows it.
+`doneguard check` runs the same checks on your git changes (or on the files you pass, or with `--base <ref>` on everything the branch changed), one progress line per check, and exits 1 on failure. No agent needed. The GIF in [End-to-end tests](#end-to-end-tests-with-evidence) shows it.
 
 **GitHub Actions**, on the files changed in the pull request:
 
@@ -234,7 +258,7 @@ jobs:
       - run: npm ci                  # install your project's tools
       - run: npx playwright install --with-deps chromium   # if you have e2e tests
       - run: pipx install doneguard
-      - run: doneguard check $(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+      - run: doneguard check --base origin/${{ github.base_ref }}
 ```
 
 GitHub's Ubuntu runners have Docker, so the test databases work there too.
@@ -330,9 +354,10 @@ It looks at the root and one folder down, so monorepos work: JS checks run once 
 | Mode | Runs | Fails when |
 |---|---|---|
 | `files` | `command <changed files>` | exit code is not 0 |
-| `filter` | `command` as is | an output line cites a changed file (perfect for whole-project tools like `tsc`) |
+| `filter` | `command` as is | an output line cites a changed file, or (in an agent session) an error appears that wasn't there when the session started. Perfect for whole-project tools like `tsc` |
 | `tests` | `command` with `{tests}` replaced by the related tests (`test_x.py`, `x_test.go`, `x.test.ts`, `x.spec.ts`, `XTest.php`…), or `{test_dirs}` by their folders (`./cart`) | exit code is not 0; skipped when there are no related tests |
 | `command` | `command` as is | exit code is not 0 |
+| `cheats` | nothing: looks at the lines added since the session started; `command` lists the [groups](#no-shortcuts) (`-` for all) | one of them shows up; each is flagged once, and `doneguard check` only lists them |
 | `e2e` | `command` with `{evidence}` replaced by a new folder in `.doneguard/evidence/`; `playwright test` gets screenshots, videos and traces there on its own | exit code is not 0; the failure screenshots are listed for the agent |
 | `postgres`, `mysql`, `redis`, `mongo` | a throwaway database in Docker (`postgres=<image>` picks the image), before the first check below it that runs; then `command` (`-` for none) with `DATABASE_URL` and friends pointing at it | the command's exit code is not 0; the checks below it are then skipped |
 
@@ -343,7 +368,8 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 | Command | What it does |
 |---|---|
 | `doneguard init [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet, otherwise list what's new) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
-| `doneguard check [files…]` | Run the checks on the given files, or on your git changes, with a progress line per check. Exit 1 on failure. |
+| `doneguard check [--base REF] [files…]` | Run the checks on the given files, on your git changes, or on everything changed since the branch left `REF`, with a progress line per check. Exit 1 on failure. |
+| `doneguard doctor` | What the checks here need (tools, Docker, Playwright browsers, hooks) and what's missing. Exit 1 if a check would be skipped. |
 | `doneguard stats` | How many "done" claims were blocked, and how many the agents fixed. |
 | `doneguard --version` | The installed version. |
 | `doneguard start` | Hook: mark the start of a session (reads the event JSON on stdin). |
@@ -363,9 +389,9 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 
 **My e2e suite takes 10 minutes.** Then it doesn't fit in a stop hook: give the `e2e` line narrower globs (only the pages that matter), point it at a smoke subset (`npx --no -- playwright test e2e/smoke`), or keep the full suite in CI with `doneguard check`.
 
-**My project already has lint errors.** `filter` checks (tsc, cargo, go vet, mvn, swift) only count errors in changed files. `files` checks lint whole files, so the default ruff rules are fatal errors only: syntax errors and undefined names.
+**My project already has lint errors.** `filter` checks (tsc, cargo, go vet, mvn, swift) only count errors in changed files and errors that are new since the session started. `files` checks lint whole files, so the default ruff rules are fatal errors only: syntax errors and undefined names.
 
-**The agent changed a function and broke a file it didn't touch. Will doneguard see it?** Related tests will: `vitest related` and `jest --findRelatedTests` follow imports. Type errors in untouched files are ignored on purpose, so old errors never block anyone.
+**The agent changed a function and broke a file it didn't touch. Will doneguard see it?** Yes. Related tests follow imports (`vitest related`, `jest --findRelatedTests`). And when a session starts, doneguard notes in the background the errors `tsc`, `cargo`, `go vet`… already report. When the agent stops, any error that wasn't on that list counts, in any file. Old errors never block anyone.
 
 **What if I edit files while the agent works?** Your changes count too: doneguard checks every file modified since the agent last finished, whoever changed it.
 

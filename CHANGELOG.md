@@ -4,7 +4,12 @@
 
 ### Added
 
+- **No shortcuts:** a `cheats` mode, which `init` adds. It sends back lines added in the session that skip or focus tests, silence the type checker or linter, or use `any`, plus test files deleted in the session. It compares against a git snapshot taken at the start, flags each finding once, and `doneguard check` only lists them.
+- **New errors in files the agent didn't touch:** when a session starts, doneguard records in the background what `filter` checks (tsc, cargo, go vet…) already report. Any error that wasn't there counts, in any file.
+- `doneguard doctor`: what the checks need and what's missing.
+- `doneguard check --base <ref>`: everything the branch changed, for CI.
 - `doneguard --version`.
+- Integration CI: a real Postgres, vitest and Playwright run on the demo project for every push (`demo/integration.sh`).
 
 ## [0.2.0] - 2026-10-30
 
