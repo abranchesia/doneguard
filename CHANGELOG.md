@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-30
+
 ### Added
 
 - A `secrets` group in `cheats`: AWS, Anthropic, OpenAI, Stripe, GitHub, Slack and Google keys, and private keys, added in the session to a file git would commit. They're shown cut short, so the key doesn't spread to the agent's transcript or a PR comment. `init` adds the group to new projects. In an existing `.doneguard.conf`, add `secrets` to the `cheats` line (a line with `-` already has it); `init --update` leaves that line as it is.
@@ -59,7 +61,8 @@
 - `doneguard check` for CI and git hooks, and `doneguard stats`.
 - Detection for TypeScript, ESLint, Vitest, Jest, Python (ruff, pytest), Rust, Go, Java (Maven), PHP and Swift.
 
-[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/abranchesia/doneguard/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/abranchesia/doneguard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/abranchesia/doneguard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/abranchesia/doneguard/releases/tag/v0.2.0
