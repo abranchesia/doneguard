@@ -4,6 +4,7 @@
 
 **Your AI coding agent can't say "done" until the checks pass.**
 
+[![PyPI](https://img.shields.io/pypi/v/doneguard)](https://pypi.org/project/doneguard/)
 ![zero dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)
 ![python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
@@ -86,15 +87,17 @@ sequenceDiagram
 
 ## Install
 
+From [PyPI](https://pypi.org/project/doneguard/):
+
 ```bash
 uv tool install doneguard
 # or: pipx install doneguard
 doneguard --help
 ```
 
-Want to try it first? `uvx doneguard init`, then `uvx doneguard check`, runs it without installing. The agent hooks need it installed, since they call `doneguard` by name.
-
-If your shell can't find `doneguard` afterwards, run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal. The hooks call `doneguard` by name, so it has to be on your `PATH`.
+- **Try it without installing:** `uvx doneguard init`, then `uvx doneguard check`. The agent hooks call `doneguard` by name, so for them it has to be installed and on your `PATH`.
+- **Shell can't find `doneguard`?** Run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal.
+- **Upgrade:** `uv tool upgrade doneguard` (or `pipx upgrade doneguard`).
 
 Requirements: Python 3.9+ (only to run doneguard itself), macOS or Linux, and the tools your checks call (`tsc`, `ruff`, `cargo`…) installed in the project. git is optional; with it, change detection respects `.gitignore`. Docker is optional, for [test databases](#tests-that-need-a-database). Playwright browsers are optional, for [end-to-end tests](#end-to-end-tests-with-evidence).
 
@@ -369,7 +372,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 
 **Does it send my code anywhere?** No. It runs your own tools on your machine. No network calls, no telemetry (Docker may pull a database image the first time). It's one file: [`doneguard.py`](https://github.com/abranchesia/doneguard/blob/main/doneguard.py).
 
-**How do I uninstall?** Remove the `doneguard` entries from your agent's hook config, delete `.doneguard.conf`, then `uv tool uninstall doneguard`.
+**How do I uninstall?** Remove the `doneguard` entries from your agent's hook config, delete `.doneguard.conf`, then `uv tool uninstall doneguard` (or `pipx uninstall doneguard`).
 
 **Windows?** macOS and Linux for now: commands run through `sh`.
 
@@ -381,6 +384,8 @@ Small on purpose: one file, standard library only. New stack detections, agent a
 uvx pytest            # run the tests
 vhs demo/check.tape   # re-record a GIF (needs vhs, npm and Docker; claude.tape also needs Claude Code)
 ```
+
+Releasing: bump `version` in `pyproject.toml`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`. The [release workflow](https://github.com/abranchesia/doneguard/blob/main/.github/workflows/release.yml) runs the tests and publishes to PyPI.
 
 ## License
 
