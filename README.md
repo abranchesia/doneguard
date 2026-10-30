@@ -82,11 +82,10 @@ sequenceDiagram
 ## Install
 
 ```bash
-uv tool install doneguard      # or: pipx install doneguard
+uv tool install git+https://github.com/abranchesia/doneguard
+# or: pipx install git+https://github.com/abranchesia/doneguard
 doneguard --help
 ```
-
-Or straight from GitHub (latest `main`): `uv tool install git+https://github.com/abranchesia/doneguard`
 
 If your shell can't find `doneguard` afterwards, run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal. The hooks call `doneguard` by name, so it has to be on your `PATH`.
 
@@ -143,7 +142,7 @@ jobs:
         with:
           fetch-depth: 0
       - run: npm ci                  # install your project's tools
-      - run: pipx install doneguard
+      - run: pipx install git+https://github.com/abranchesia/doneguard
       - run: doneguard check $(git diff --name-only origin/${{ github.base_ref }}...HEAD)
 ```
 
