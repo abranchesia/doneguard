@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Codex CLI and GitHub Copilot CLI are tested end to end in real sessions (✅), with recordings in the README.
+
 ## [0.4.0] - 2026-10-30
 
 ### Added

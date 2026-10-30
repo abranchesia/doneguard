@@ -42,9 +42,10 @@ Not using Claude Code? doneguard speaks each agent's own hook format. `doneguard
 |---|---|---|
 | **Claude Code** | `Stop` hook → `decision: block` | ✅ tested end to end |
 | **Cursor** (IDE and CLI) | `stop` hook → `followup_message` | 🧪 |
-| **OpenAI Codex CLI** | `Stop` hook → `decision: block` | 🧪 |
+| **OpenAI Codex CLI** | `Stop` hook → `decision: block` | ✅ tested end to end ([GIF](#codex-and-copilot)) |
+| **GitHub Copilot CLI** | `agentStop` hook → `decision: block` | ✅ tested end to end ([GIF](#codex-and-copilot)) |
+| **GitHub Copilot** in VS Code | the same `agentStop` hook | 🧪 |
 | **Gemini CLI** | `AfterAgent` hook → `decision: block` | 🧪 |
-| **GitHub Copilot** (CLI and VS Code) | `agentStop` hook → `decision: block` | 🧪 |
 | **Google Antigravity** | `Stop` hook → `decision: continue` | 🧪 |
 | **Devin Local** (successor of Windsurf Cascade) | `Stop` hook → `decision: block` | 🧪 |
 | **Kiro CLI** | `Stop` hook → `decision: block` | 🧪 |
@@ -52,7 +53,19 @@ Not using Claude Code? doneguard speaks each agent's own hook format. `doneguard
 | **OpenCode** | plugin on `session.idle` → new prompt | ⚗️ experimental |
 | **Cline, Windsurf Cascade, anything else** | a rule: *"run `doneguard check` before saying done"* | manual |
 
-✅ the GIF above. 🧪 built from the agent's official hook docs and tested against its documented payloads. ⚗️ experimental. Using one of them? Tell how it went, worked or not, in an [agent report](https://github.com/abranchesia/doneguard/issues/new?template=agent-report.yml): that's what turns 🧪 into ✅.
+✅ a real session, recorded: Claude Code at the top, Codex and Copilot below. 🧪 built from the agent's official hook docs and tested against its documented payloads. ⚗️ experimental. Using one of them? Tell how it went, worked or not, in an [agent report](https://github.com/abranchesia/doneguard/issues/new?template=agent-report.yml): that's what turns 🧪 into ✅.
+
+<a id="codex-and-copilot"></a>
+<details>
+<summary><b>Codex and Copilot</b>: the same task, the same block, the same fix</summary>
+
+<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/codex.gif" alt="Real Codex CLI session: Codex makes total() return a string; the Stop hook is blocked by tsc, vitest and Playwright; Codex updates server.ts and the test; Stop completes; doneguard stats shows 1 blocked, 1 fixed" width="820">
+
+<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/copilot.gif" alt="Real Copilot CLI session: Copilot can only edit files, so its own attempts to run the tests are denied; doneguard runs them when it stops, blocks it, and it fixes server.ts and the test; doneguard stats shows 1 blocked, 1 fixed" width="820">
+
+Codex runs a project's hooks once you approve them (`/hooks` in Codex), and Copilot once you trust the folder. The recordings do that for the one run ([codex.tape](https://github.com/abranchesia/doneguard/blob/main/demo/codex.tape), [copilot.tape](https://github.com/abranchesia/doneguard/blob/main/demo/copilot.tape)).
+
+</details>
 
 Cursor, Copilot and Devin also run the hooks in `.claude/`. When Claude Code is hooked too, `init` doesn't add theirs, so nothing runs twice.
 
