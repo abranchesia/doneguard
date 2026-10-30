@@ -27,7 +27,7 @@ doneguard is a **stop hook**. When the agent tries to finish, doneguard runs you
 
 - [Works with your agent](#works-with-your-agent)
 - [How it works](#how-it-works)
-- [Install](#install)
+- [Install](#install) · [Update](#update)
 - [Add it to an existing project](#add-it-to-an-existing-project) · [Start from zero](#start-a-new-project-from-zero)
 - [Tests that need a database](#tests-that-need-a-database) · [End-to-end tests with evidence](#end-to-end-tests-with-evidence) · [No shortcuts](#no-shortcuts)
 - [Without hooks: CI, git hooks, any agent](#without-hooks-ci-git-hooks-any-agent)
@@ -113,9 +113,34 @@ doneguard --help
 - **Try it without installing:** `uvx doneguard init`, then `uvx doneguard check`. The agent hooks call `doneguard` by name, so for them it has to be installed and on your `PATH`.
 - **Shell can't find `doneguard`?** Run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal.
 - **A check isn't running?** `doneguard doctor` lists what each check needs (tools, Docker, browsers, hooks) and what's missing.
-- **Upgrade:** `uv tool upgrade doneguard` (or `pipx upgrade doneguard`). The hooks pick up the new version on the agent's next stop. Then run `doneguard init --update` in each project to add the checks the new version brings. `uv tool list --outdated` and `doneguard doctor` tell you when there's a new one. To get an email, watch the repo's releases.
+- **New version out?** See [Update](#update).
 
 Requirements: Python 3.9+ (only to run doneguard itself), macOS or Linux, and the tools your checks call (`tsc`, `ruff`, `cargo`…) installed in the project. git is optional; with it, change detection respects `.gitignore`. Docker is optional, for [test databases](#tests-that-need-a-database). Playwright browsers are optional, for [end-to-end tests](#end-to-end-tests-with-evidence).
+
+## Update
+
+doneguard never updates itself and never checks for updates on its own. Nothing runs in your agent's hooks that you didn't install.
+
+**Is there a new version?**
+
+```bash
+uv tool list --outdated     # doneguard v0.3.0 [latest: 0.4.0]
+doneguard doctor            # ↑ doneguard 0.4.0 is out: uv tool upgrade doneguard…
+doneguard --version         # the version you have
+```
+
+`doctor` asks pypi.org only when you run it. To get an email for each new version: on GitHub, **Watch → Custom → Releases**. What changed: [Releases](https://github.com/abranchesia/doneguard/releases) and [CHANGELOG.md](https://github.com/abranchesia/doneguard/blob/main/CHANGELOG.md).
+
+**Update:**
+
+```bash
+uv tool upgrade doneguard   # or: pipx upgrade doneguard
+doneguard init --update     # in each project: adds the checks the new version brings
+```
+
+- **The hooks pick it up on their own.** They call `doneguard` by name, so the agent's next stop already runs the new version. There's no need to restart the agent or run `init` again for the hooks.
+- **`init --update` only adds lines.** It puts each new check where it works and never changes yours. Commit `.doneguard.conf` so your team gets them too, and each teammate runs `uv tool upgrade doneguard`.
+- **In CI**, `pipx install doneguard` or `uvx doneguard` installs the latest version on every run.
 
 ## Add it to an existing project
 
