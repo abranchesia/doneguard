@@ -9,9 +9,9 @@
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 ![agents](https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Cursor%20%C2%B7%20Codex%20%C2%B7%20Gemini%20%C2%B7%20Copilot%20%C2%B7%20%2B5-black)
 
-<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/claude.gif" alt="Real Claude Code session: the agent changes total() to return a string and tries to stop; doneguard blocks it with the failing vitest output; the agent updates the test; doneguard stats shows 1 blocked, 1 fixed" width="820">
+<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/claude.gif" alt="Real Claude Code session: the agent makes total() return a string and tries to stop; doneguard starts a throwaway Postgres, seeds it, runs vitest and Playwright, and blocks it with both failures; the agent fixes the page and the test; doneguard stats shows 1 blocked, 1 fixed" width="820">
 
-<sub>A real Claude Code session. The agent can only read and edit files here, so it can't run the tests itself: doneguard does when it tries to stop.</sub>
+<sub>A real Claude Code session. The agent can only read and edit files, so it can't run anything itself. When it tries to stop, doneguard starts a throwaway Postgres, seeds it, runs the unit tests and the Playwright tests, and sends back both failures.</sub>
 
 </div>
 
@@ -19,10 +19,14 @@ Agents love to finish with *"Done! ✅"* while the types are broken and the test
 
 doneguard is a **stop hook**. When the agent tries to finish, doneguard runs your type checker, linter and *related* tests on the files changed in the session. If anything fails, the errors go straight back to the agent and it keeps working until they pass.
 
+- **Tests that need a database?** doneguard starts a throwaway Postgres, MySQL, Redis or MongoDB in Docker, migrates and seeds it, points `DATABASE_URL` at it, runs the tests and removes it. Your real database stays out of it.
+- **Playwright or Cypress in the project?** It runs the end-to-end tests in a real browser and keeps a screenshot and a video of every test in `.doneguard/evidence/`. When one fails, the agent gets the error, the failure screenshot and a snapshot of the page.
+
 - [Works with your agent](#works-with-your-agent)
 - [How it works](#how-it-works)
 - [Install](#install)
 - [Add it to an existing project](#add-it-to-an-existing-project) · [Start from zero](#start-a-new-project-from-zero)
+- [Tests that need a database](#tests-that-need-a-database) · [End-to-end tests with evidence](#end-to-end-tests-with-evidence)
 - [Without hooks: CI, git hooks, any agent](#without-hooks-ci-git-hooks-any-agent)
 - [Stats](#stats) · [Day to day](#day-to-day) · [Teams](#teams)
 - [Stacks](#what-init-detects) · [Configuration](#configuration) · [Commands](#commands) · [FAQ](#faq)
@@ -62,9 +66,10 @@ sequenceDiagram
     Agent->>Agent: edits src/cart.ts
     Agent->>DG: "Done!" → stop hook → doneguard verify
     DG->>Tools: checks on files changed since the mark
-    Tools-->>DG: vitest fails in src/cart.test.ts
-    DG-->>Agent: not done yet + the errors
-    Agent->>Agent: updates src/cart.test.ts
+    Note over DG,Tools: tsc → throwaway Postgres + seed → vitest → Playwright
+    Tools-->>DG: vitest fails, Playwright fails (screenshot saved)
+    DG-->>Agent: not done yet + the errors + the screenshot path
+    Agent->>Agent: fixes server.ts and src/cart.test.ts
     Agent->>DG: "Done!" → doneguard verify
     DG->>Tools: same checks again
     Tools-->>DG: all green
@@ -75,7 +80,7 @@ sequenceDiagram
 1. **`doneguard init`** looks at your project, writes the checks to `.doneguard.conf` and registers two hooks in your agent's config.
 2. **Session starts:** the agent runs `doneguard start`, which notes the time.
 3. **The agent says it's done:** before letting it stop, the agent runs `doneguard verify`.
-4. **verify** lists the files modified since the mark (respecting `.gitignore`), runs only the checks whose globs match them, and only the tests related to them.
+4. **verify** lists the files modified since the mark (respecting `.gitignore`), runs only the checks whose globs match them, and only the tests related to them. If a database is needed, it starts one in Docker first and removes it at the end. End-to-end runs leave their evidence in `.doneguard/evidence/`.
 5. **Something fails:** the errors go back to the agent in its own format and it keeps working. **Everything passes:** the agent stops and the mark moves forward.
 6. **Safety valve:** after 3 failed attempts in a row, doneguard lets the agent stop and tells you, so it never loops forever.
 
@@ -89,11 +94,11 @@ doneguard --help
 
 If your shell can't find `doneguard` afterwards, run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal. The hooks call `doneguard` by name, so it has to be on your `PATH`.
 
-Requirements: Python 3.9+ (only to run doneguard itself), macOS or Linux, and the tools your checks call (`tsc`, `ruff`, `cargo`…) installed in the project. git is optional; with it, change detection respects `.gitignore`.
+Requirements: Python 3.9+ (only to run doneguard itself), macOS or Linux, and the tools your checks call (`tsc`, `ruff`, `cargo`…) installed in the project. git is optional; with it, change detection respects `.gitignore`. Docker is optional, for [test databases](#tests-that-need-a-database). Playwright browsers are optional, for [end-to-end tests](#end-to-end-tests-with-evidence).
 
 ## Add it to an existing project
 
-<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/init.gif" alt="doneguard init in an existing TypeScript project detects tsc and vitest and hooks into Claude Code" width="820">
+<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/init.gif" alt="doneguard init in an existing TypeScript project with Postgres and Playwright detects tsc, a throwaway Postgres with its migrate and seed scripts, vitest and Playwright, and hooks into Claude Code" width="820">
 
 ```bash
 cd your-project
@@ -108,6 +113,8 @@ Then restart your agent so it loads the hooks, and:
 3. **Work as usual.** Old errors elsewhere in the repo don't matter: doneguard only looks at files changed in the session.
 
 Using an agent that `init` didn't find (or several)? Name them: `doneguard init codex gemini`, or `doneguard init all`.
+
+Already have a `.doneguard.conf`? `init` never rewrites it, but it lists what it detects now and the file doesn't have yet, so upgrading is copy and paste.
 
 ## Start a new project from zero
 
@@ -124,11 +131,89 @@ doneguard init              # now detects tsc + vitest
 
 Letting the agent scaffold the project? Tell it: *"once the project is set up, run `doneguard init`"*. The config is read on every stop, so the checks kick in right away.
 
+## Tests that need a database
+
+Integration tests usually need a database with the schema and some data in it. When `init` sees that your project talks to one, it adds a line for it right above the tests, at the end of the file:
+
+```text
+*.ts,*.tsx            | @package.json | filter                      | npx --no -- tsc --noEmit --pretty false -p .
+*                     | .             | postgres=postgres:17-alpine | npm run db:migrate && npm run db:seed
+*.js,*.jsx,*.ts,*.tsx | @package.json | files                       | npx --no -- vitest related --run --passWithNoTests
+```
+
+Right before the first check below it runs, doneguard:
+
+1. **starts a throwaway database** in Docker, on a free port of `127.0.0.1`. Same image as your `docker-compose.yml` when there is one (pgvector and PostGIS included), so the version and extensions match.
+2. **points your project at it.** For every check below, doneguard overrides `DATABASE_URL`, every variable holding a URL of the same kind in your `.env` files or your shell (`DIRECT_URL`, `POSTGRES_PRISMA_URL`…), and every URL variable your ORM config reads (Prisma's `env("…")`, `process.env.…` in `drizzle.config` and `knexfile`). For Postgres it also sets `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD` and `PGDATABASE`. dotenv, Prisma, Next.js, Vite and pydantic all let a real environment variable win over `.env`.
+3. **migrates and seeds it** with the command on the line, with `NODE_ENV=test`. A broken migration or seed is reported to the agent as the cause, and the tests after it are not run, so it isn't buried under fifty "relation does not exist" errors. If the command can't run at all, the tests below are skipped rather than run on an empty database.
+4. **runs the checks below it**, then **removes the container**. If the run is killed, the container still removes itself after 15 minutes.
+
+If no check below it runs (only a README changed, or no related tests), no database starts. With the image cached, Postgres is ready in about a second.
+
+| Detected by | Database | Environment |
+|---|---|---|
+| `pg`, `postgres`, `psycopg`, `asyncpg`, gem `pg`, Prisma `provider = "postgresql"`, or a `postgres`/`postgis`/`pgvector` image in compose | `postgres` | `DATABASE_URL`, `PG*` |
+| `mysql2`, `mysqlclient`, `pymysql`, Prisma `provider = "mysql"` | `mysql` | `DATABASE_URL` |
+| `redis`, `ioredis`, `bullmq` | `redis` | `REDIS_URL` |
+| `mongodb`, `mongoose`, `pymongo`, `motor`, `mongoid` | `mongo` | `MONGODB_URI`, `MONGO_URL` |
+
+The migrate and seed command `init` writes:
+
+| Project | Command |
+|---|---|
+| Prisma | `prisma migrate deploy` (or `prisma db push` without migrations), then your `db:seed`/`seed` script or `prisma db seed` |
+| Drizzle | `drizzle-kit push`, then your seed script |
+| Knex | `knex migrate:latest`, then your seed script |
+| Other Node projects | your `db:migrate`/`migrate` and `db:seed`/`seed` scripts |
+| Alembic (when `env.py` reads the environment) | `alembic upgrade head` |
+| Rails | `RAILS_ENV=test bin/rails db:prepare` |
+| Django, Redis, MongoDB | `-` (nothing: Django's test runner builds its own test database) |
+
+`init` only writes a migrate and seed command when it can see the connection comes from a variable it redirects: the ORM config reads a URL variable, or, for plain npm scripts, your `.env` files hold a database URL. Otherwise it writes `-` and tells you to fill it in. A config that builds the connection from `DB_HOST`, `DB_USER`… can't be redirected that way, so doneguard never runs a migration through it on its own.
+
+**Docker not running?** The database and the checks below it are skipped, never failed, and doneguard says so (Claude Code shows it after the turn). `init` puts these lines last, so your linters and the stacks that don't need a database still run. Your tests don't need a database after all? Delete the line.
+
+## End-to-end tests with evidence
+
+<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/check.gif" alt="doneguard check: tsc passes, a throwaway Postgres starts and is seeded, vitest and Playwright fail, and the output lists the failure screenshot, the page snapshot and the HTML report in .doneguard/evidence; after the fix every check passes" width="820">
+
+With `@playwright/test` and a `playwright.config.*` that starts the app (`webServer`), `init` adds an `e2e` line. When the agent changes a page, a component or a stylesheet, doneguard runs the suite in a real browser and keeps everything in your project:
+
+```text
+.doneguard/
+├── .gitignore                       # "*": evidence stays out of git unless you delete this
+└── evidence/
+    └── 2026-10-30_12-08-37/
+        ├── report/                  # npx playwright show-report .doneguard/evidence/2026-10-30_12-08-37/report
+        └── results/
+            └── cart-two-mugs-cost-20-00/
+                ├── test-failed-1.png    # what the page looked like when it failed
+                ├── error-context.md     # the page as text, for the agent
+                ├── video.webm
+                └── trace.zip            # npx playwright show-trace …
+```
+
+- **Every test gets a screenshot and a video**, passing or not; failures also get a trace. Your own Playwright config is used as is: doneguard wraps it for the run (a temporary `.doneguard.playwright.config.*` next to yours) only to add the evidence and the output folder.
+- **When a test fails, the agent gets** the error, the paths of the failure screenshot and the page snapshot, and opens them like any other file. Claude Code reads screenshots.
+- **Which server the tests hit:** without a test database, `CI` is unset, like a run in your terminal, so a `webServer` with `reuseExistingServer: !process.env.CI` reuses the dev server you already have running. With a test database, `CI` stays set, so Playwright starts its own server pointed at it; if your dev server holds the port, the check is skipped and doneguard tells you, instead of clicking through your dev database.
+- **The last 10 runs are kept.** Older ones are deleted.
+- **No browsers installed?** The check is skipped until you run `npx playwright install chromium`.
+- **Timeout:** 7 minutes, then the check is skipped.
+
+<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/evidence.png" alt="The failure screenshot Playwright saved: two mugs in the cart, total $10.00 instead of $20.00" width="560">
+
+<sub>`test-failed-1.png` from the run above: two mugs in the cart, total $10.00. The agent sees this.</sub>
+
+Any other runner works too: put `{evidence}` in the command and doneguard replaces it with that run's folder. pytest-playwright gets one automatically when there is a `tests/e2e` or `e2e` folder. Cypress needs your app running, so `init` suggests a line instead of writing it:
+
+```text
+*.py,*.html,*.css,*.js | . | e2e | pytest -q --tb=short tests/e2e --screenshot on --video on --tracing retain-on-failure --output {evidence}
+*.tsx,*.css            | . | e2e | npx --no -- start-server-and-test dev http://localhost:3000 'cypress run --config screenshotsFolder={evidence}/screenshots,videosFolder={evidence}/videos,video=true'
+```
+
 ## Without hooks: CI, git hooks, any agent
 
-`doneguard check` runs the same checks on your git changes (or on the files you pass) and exits 1 on failure. No agent needed.
-
-<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/check.gif" alt="doneguard check reports a tsc error and a failing vitest test and exits 1; after the fix it exits 0" width="820">
+`doneguard check` runs the same checks on your git changes (or on the files you pass), one progress line per check, and exits 1 on failure. No agent needed. The GIF in [End-to-end tests](#end-to-end-tests-with-evidence) shows it.
 
 **GitHub Actions**, on the files changed in the pull request:
 
@@ -142,9 +227,12 @@ jobs:
         with:
           fetch-depth: 0
       - run: npm ci                  # install your project's tools
+      - run: npx playwright install --with-deps chromium   # if you have e2e tests
       - run: pipx install git+https://github.com/abranchesia/doneguard
       - run: doneguard check $(git diff --name-only origin/${{ github.base_ref }}...HEAD)
 ```
+
+GitHub's Ubuntu runners have Docker, so the test databases work there too.
 
 **Git pre-commit hook:**
 
@@ -171,19 +259,22 @@ doneguard stats since 2026-10-30
 Caught 1 broken "done" claim(s); the agents fixed 100% on their own.
 ```
 
-That's the real output of the session in the GIF at the top. The log lives in `~/.local/state/doneguard/log.jsonl` (or `$XDG_STATE_HOME`) and stores only times, agent names, results and tool names: no code, no paths. Delete it to start over.
+That's the real output of the session in the GIF at the top: one stop blocked by Playwright and vitest, fixed on the next try. The log lives in `~/.local/state/doneguard/log.jsonl` (or `$XDG_STATE_HOME`) and stores only times, agent names, results and tool names: no code, no paths. Delete it to start over.
 
 ## Day to day
 
 - **You don't run anything.** The hooks fire on their own when a session starts and every time the agent tries to stop.
 - **When a check fails**, the agent gets the errors and keeps going. You see it fixing things instead of saying "done".
 - **If it still fails after 3 tries**, the agent stops (Claude Code shows `doneguard: checks still failing after 3 fix attempts`).
+- **After an e2e run**, the screenshots and videos are in `.doneguard/evidence/`, newest last. Open the report with `npx playwright show-report .doneguard/evidence/<run>/report`.
 - **Pause a check** by commenting its line with `#` in `.doneguard.conf`. It takes effect on the next stop.
 - **Check by hand** at any time: `doneguard check`.
 
 ## Teams
 
 Commit `.doneguard.conf`. Each developer installs doneguard and runs `doneguard init`, which keeps the existing config and adds their hooks.
+
+`.doneguard/` ignores itself, so evidence never lands in a commit by accident. To keep evidence in the repo (for review, or as a CI artifact), delete `.doneguard/.gitignore`.
 
 Hook files that live in the repo (`.cursor/hooks.json`, `.codex/hooks.json`, `.gemini/settings.json`, `.github/hooks/doneguard.json`…) run for everyone who opens the project with that agent. Commit them only if everyone has doneguard installed: without it, their agent reports a failed hook on every stop. Claude Code's hooks go to `.claude/settings.local.json`, which is personal.
 
@@ -192,14 +283,19 @@ Hook files that live in the repo (`.cursor/hooks.json`, `.codex/hooks.json`, `.g
 | Stack | Detected by | Check |
 |---|---|---|
 | TypeScript | `tsconfig.json` | `tsc --noEmit`, errors in changed files only |
-| ESLint | `eslint` in `package.json` | `eslint --quiet` on changed files |
+| ESLint / Biome | `eslint` or `@biomejs/biome` in `package.json` | `eslint --quiet` / `biome lint` on changed files |
 | Vitest / Jest | `vitest` or `jest` in `package.json` | `vitest related` / `jest --findRelatedTests` |
-| Python | `pyproject.toml`, `setup.py`, `requirements.txt` | `ruff` (syntax errors, undefined names), `pytest` on related tests |
+| Playwright | `playwright.config.*` with a `webServer` | the e2e suite, with [evidence](#end-to-end-tests-with-evidence) (Cypress: a suggested line) |
+| Python | `pyproject.toml`, `setup.py`, `requirements.txt` | `ruff` (syntax errors, undefined names), `pytest` on related tests, pytest-playwright e2e |
+| Ruby | `Gemfile` | `rubocop` (errors only), `bin/rails test` or `rspec` on related tests |
+| Go | `go.mod` | `go vet` (findings in changed files), `go test` on the packages with related tests |
 | Rust | `Cargo.toml` | `cargo check`, errors in changed files only |
-| Go | `go.mod` | `go vet`, findings in changed files only |
-| Java | `pom.xml` | `mvn compile`, errors in changed files only |
-| PHP | `composer.json` | `php -l` on changed files |
+| Java / Kotlin | `pom.xml`, `build.gradle*` + `gradlew` | `mvn compile` / `./gradlew classes`, errors in changed files only |
+| C# | `*.sln`, `*.csproj` | `dotnet build`, errors in changed files only |
+| PHP | `composer.json` | `php -l` on changed files, Pest or PHPUnit on related tests |
+| Deno | `deno.json` | `deno check`, `deno test` on related tests |
 | Swift | `Package.swift` | `swift build`, errors in changed files only |
+| Databases | dependencies, Prisma schema, `docker-compose.yml` | a [throwaway Postgres, MySQL, Redis or MongoDB](#tests-that-need-a-database) |
 
 It looks at the root and one folder down, so monorepos work: JS checks run once per package (`@package.json`). For Python it uses `uv run` or `.venv/bin/` when it finds them. Anything else is one line of [configuration](#configuration) away.
 
@@ -208,12 +304,15 @@ It looks at the root and one folder down, so monorepos work: JS checks run once 
 `.doneguard.conf` lives at the root of the project. One check per line, `#` for comments:
 
 ```text
-# <globs>  | <dir>         | <mode>  | <command>
-*.ts,*.tsx | @package.json | filter  | npx --no -- tsc --noEmit --pretty false -p .
-*.py       | .             | files   | .venv/bin/ruff check --select E9,F63,F7,F82 --output-format concise
-*.py       | .             | tests   | .venv/bin/pytest -x -q --tb=short {tests}
-*.rb       | .             | files   | bundle exec rubocop --format emacs
-*.sql      | .             | command | ./scripts/check-migrations.sh
+# <globs>       | <dir>         | <mode>   | <command>
+*.ts,*.tsx      | @package.json | filter   | npx --no -- tsc --noEmit --pretty false -p .
+*.py            | .             | files    | .venv/bin/ruff check --select E9,F63,F7,F82 --output-format concise
+*               | .             | postgres | .venv/bin/alembic upgrade head
+*               | .             | redis    | -
+*.py            | .             | tests    | .venv/bin/pytest -x -q --tb=short {tests}
+*.go            | .             | tests    | go test {test_dirs}
+*.tsx,*.css     | web           | e2e      | npx --no -- playwright test
+*.sql           | .             | command  | ./scripts/check-migrations.sh
 ```
 
 | Field | Meaning |
@@ -227,17 +326,19 @@ It looks at the root and one folder down, so monorepos work: JS checks run once 
 |---|---|---|
 | `files` | `command <changed files>` | exit code is not 0 |
 | `filter` | `command` as is | an output line cites a changed file (perfect for whole-project tools like `tsc`) |
-| `tests` | `command` with `{tests}` replaced by the related tests (`test_x.py`, `x_test.go`, `x.test.ts`, `x.spec.ts`, `XTest.php`…) | exit code is not 0; skipped when there are no related tests |
+| `tests` | `command` with `{tests}` replaced by the related tests (`test_x.py`, `x_test.go`, `x.test.ts`, `x.spec.ts`, `XTest.php`…), or `{test_dirs}` by their folders (`./cart`) | exit code is not 0; skipped when there are no related tests |
 | `command` | `command` as is | exit code is not 0 |
+| `e2e` | `command` with `{evidence}` replaced by a new folder in `.doneguard/evidence/`; `playwright test` gets screenshots, videos and traces there on its own | exit code is not 0; the failure screenshots are listed for the agent |
+| `postgres`, `mysql`, `redis`, `mongo` | a throwaway database in Docker (`postgres=<image>` picks the image), before the first check below it that runs; then `command` (`-` for none) with `DATABASE_URL` and friends pointing at it | the command's exit code is not 0; the checks below it are then skipped |
 
-A tool that isn't installed or a check that takes longer than 150 s is skipped, never failed.
+A tool that isn't installed, Docker that isn't running, missing browsers, or a check that takes longer than 150 s (7 minutes for `e2e`) is skipped, never failed.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `doneguard init [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
-| `doneguard check [files…]` | Run the checks on the given files, or on your git changes. Exit 1 on failure. |
+| `doneguard init [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet, otherwise list what's new) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
+| `doneguard check [files…]` | Run the checks on the given files, or on your git changes, with a progress line per check. Exit 1 on failure. |
 | `doneguard stats` | How many "done" claims were blocked, and how many the agents fixed. |
 | `doneguard start` | Hook: mark the start of a session (reads the event JSON on stdin). |
 | `doneguard verify` | Hook: check the files changed since the mark and answer in the agent's format. |
@@ -248,6 +349,14 @@ A tool that isn't installed or a check that takes longer than 150 s is skipped, 
 
 **Does it slow the agent down?** It runs once, when the agent tries to stop, and only the checks that match the changed files. Usually a few seconds.
 
+**Can it touch my real database?** The migrate and seed command only runs after the throwaway database is up, with `DATABASE_URL`, the `PG*` variables, every same-kind URL from your `.env` files and shell, and the URL variables your ORM config reads all pointing at it. If Docker can't start it, the command doesn't run at all. `init` only writes the command when it can see the connection goes through one of those variables, and e2e tests never reuse your dev server while a test database is up. What doneguard can't redirect is a connection hardcoded in your code: read the database line before you commit it.
+
+**Docker is off on my laptop half the time.** Then the database line and the checks below it are skipped, with a note, and everything above it still runs (`init` puts them last). Start Docker Desktop, OrbStack or Colima and the next stop runs them again.
+
+**Isn't a database per stop slow?** About a second with the image cached, plus your migrations and seed. It only starts when a check below it actually runs, and it uses `fsync=off` because the data is thrown away anyway.
+
+**My e2e suite takes 10 minutes.** Then it doesn't fit in a stop hook: give the `e2e` line narrower globs (only the pages that matter), point it at a smoke subset (`npx --no -- playwright test e2e/smoke`), or keep the full suite in CI with `doneguard check`.
+
 **My project already has lint errors.** `filter` checks (tsc, cargo, go vet, mvn, swift) only count errors in changed files. `files` checks lint whole files, so the default ruff rules are fatal errors only: syntax errors and undefined names.
 
 **The agent changed a function and broke a file it didn't touch. Will doneguard see it?** Related tests will: `vitest related` and `jest --findRelatedTests` follow imports. Type errors in untouched files are ignored on purpose, so old errors never block anyone.
@@ -256,7 +365,7 @@ A tool that isn't installed or a check that takes longer than 150 s is skipped, 
 
 **Does it catch edits the agent makes through shell commands?** Yes. It compares modification times, so `sed`, codegen and scripts count, not just the edit tool.
 
-**Does it send my code anywhere?** No. It runs your own tools on your machine. No network calls, no telemetry. It's one file: [`doneguard.py`](https://github.com/abranchesia/doneguard/blob/main/doneguard.py).
+**Does it send my code anywhere?** No. It runs your own tools on your machine. No network calls, no telemetry (Docker may pull a database image the first time). It's one file: [`doneguard.py`](https://github.com/abranchesia/doneguard/blob/main/doneguard.py).
 
 **How do I uninstall?** Remove the `doneguard` entries from your agent's hook config, delete `.doneguard.conf`, then `uv tool uninstall doneguard`.
 
@@ -268,7 +377,7 @@ Small on purpose: one file, standard library only. New stack detections, agent a
 
 ```bash
 uvx pytest            # run the tests
-vhs demo/check.tape   # re-record a GIF (needs vhs and npm; claude.tape also needs Claude Code)
+vhs demo/check.tape   # re-record a GIF (needs vhs, npm and Docker; claude.tape also needs Claude Code)
 ```
 
 ## License

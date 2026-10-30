@@ -1,13 +1,15 @@
 # The same checks without any agent: by hand, in CI or in a git hook. Record from the repo root: vhs demo/check.tape
+# Needs Docker running: the tests get a throwaway Postgres.
 Output demo/check.gif
 Require npm
+Require docker
 Source demo/style.tape
-Set Height 900
+Set Height 940
 
 Hide
-Type "source demo/setup.sh shop && doneguard init claude >/dev/null && cp $DEMO/cart.bug.ts src/cart.ts && clear"
+Type `source demo/setup.sh store >/dev/null 2>&1 && doneguard init claude >/dev/null && sed -i '' 's/ [*] qty;/;/' src/cart.ts && clear`
 Enter
-Wait
+Wait@5m
 Show
 
 Type "git --no-pager diff --stat"
@@ -15,18 +17,18 @@ Enter
 Sleep 1.5s
 Type `doneguard check; echo "exit $?"`
 Enter
-Wait
-Sleep 5s
+Wait@3m
+Sleep 6s
 
 Hide
-Type "cp $DEMO/cart.ok.ts src/cart.ts && clear"
+Type "git checkout -q src/cart.ts && clear"
 Enter
 Wait
 Show
 
 Type "# after the fix:"
 Enter
-Type `doneguard check; echo "exit $?"`
+Type `doneguard check src/cart.ts; echo "exit $?"`
 Enter
-Wait
+Wait@3m
 Sleep 4s

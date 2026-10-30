@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "doneguard"
-version = "0.1.0"
+version = "0.2.0"
 description = "Your AI coding agent can't say \"done\" until the checks pass."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-keywords = ["claude-code", "cursor", "codex", "gemini-cli", "copilot", "aider", "ai-agents", "coding-agent", "hooks", "harness", "verification"]
+keywords = ["claude-code", "cursor", "codex", "gemini-cli", "copilot", "aider", "ai-agents", "coding-agent", "hooks", "harness", "verification", "playwright", "e2e", "postgres", "docker"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
