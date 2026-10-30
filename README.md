@@ -86,6 +86,8 @@ uv tool install doneguard      # or: pipx install doneguard
 doneguard --help
 ```
 
+Or straight from GitHub (latest `main`): `uv tool install git+https://github.com/abranchesia/doneguard`
+
 If your shell can't find `doneguard` afterwards, run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal. The hooks call `doneguard` by name, so it has to be on your `PATH`.
 
 Requirements: Python 3.9+ (only to run doneguard itself), macOS or Linux, and the tools your checks call (`tsc`, `ruff`, `cargo`…) installed in the project. git is optional; with it, change detection respects `.gitignore`.
