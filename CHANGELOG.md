@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Receipt:** when everything passes, Claude Code shows what doneguard checked under the agent's answer: `doneguard: ✓ cheats · tsc · vitest (3.1 s)`.
+- `doneguard report [--base REF] [files]`: the checks as markdown, for a PR comment (`| gh pr comment --body-file -`) or a GitHub Actions summary (`>> $GITHUB_STEP_SUMMARY`).
+- A "checked by doneguard" README badge; `init` points to it.
+
 ## [0.3.0] - 2026-10-30
 
 ### Added

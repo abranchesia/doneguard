@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import time
 
@@ -462,3 +463,22 @@ def test_doctor_names_what_is_missing(tmp_path, capsys):
     assert doneguard.doctor(tmp_path) == 1
     out = capsys.readouterr().out
     assert "✗ no-such-linter-xyz: not found" in out and "✗ mode `weird`" in out and "hooked into no agent" in out
+
+
+def test_claude_gets_a_receipt_when_everything_passes(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path / "proj", "*.py | . | files | true\n*.py | . | tests | true {tests}\n")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(root))
+    doneguard.hook("start", {"session_id": "r1"})
+    touch_later(root / "a.py")
+    doneguard.hook("verify", {"session_id": "r1"})
+    assert re.fullmatch(r"doneguard: ✓ true \(\d+\.\d s\)\.", json.loads(capsys.readouterr().out)["systemMessage"])
+
+
+def test_report_is_markdown_for_a_pull_request(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path / "p", "*.py | . | files | true\n*.py | . | command | echo 'boom: assert 1 == 2'; exit 1\n*.py | . | command | no-such-tool-xyz\n", ["a.py"])
+    monkeypatch.chdir(root)
+    assert doneguard.main(["report", "a.py"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("### ❌ doneguard: checks failing\n\n| Check | Result | Time |")
+    assert "| true | ✓ passed |" in out and "| echo | ✗ failed |" in out and "| no-such-tool-xyz | – skipped: " in out
+    assert "<summary>What failed</summary>" in out and "boom: assert 1 == 2" in out

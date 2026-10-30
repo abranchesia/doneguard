@@ -31,7 +31,7 @@ doneguard is a **stop hook**. When the agent tries to finish, doneguard runs you
 - [Add it to an existing project](#add-it-to-an-existing-project) · [Start from zero](#start-a-new-project-from-zero)
 - [Tests that need a database](#tests-that-need-a-database) · [End-to-end tests with evidence](#end-to-end-tests-with-evidence) · [No shortcuts](#no-shortcuts)
 - [Without hooks: CI, git hooks, any agent](#without-hooks-ci-git-hooks-any-agent)
-- [Stats](#stats) · [Day to day](#day-to-day) · [Teams](#teams)
+- [Stats](#stats) · [Show it](#show-it) · [Day to day](#day-to-day) · [Teams](#teams)
 - [Stacks](#what-init-detects) · [Configuration](#configuration) · [Commands](#commands) · [FAQ](#faq)
 
 ## Works with your agent
@@ -244,7 +244,7 @@ src/cart.test.ts:7  test.skip  skips or focuses a test: that hides the failure i
 
 `doneguard check` runs the same checks on your git changes (or on the files you pass, or with `--base <ref>` on everything the branch changed), one progress line per check, and exits 1 on failure. No agent needed. The GIF in [End-to-end tests](#end-to-end-tests-with-evidence) shows it.
 
-**GitHub Actions**, on the files changed in the pull request:
+**GitHub Actions**, on everything the pull request changed, with the result in the run's summary:
 
 ```yaml
 on: pull_request
@@ -258,7 +258,7 @@ jobs:
       - run: npm ci                  # install your project's tools
       - run: npx playwright install --with-deps chromium   # if you have e2e tests
       - run: pipx install doneguard
-      - run: doneguard check --base origin/${{ github.base_ref }}
+      - run: doneguard report --base origin/${{ github.base_ref }} >> $GITHUB_STEP_SUMMARY
 ```
 
 GitHub's Ubuntu runners have Docker, so the test databases work there too.
@@ -290,9 +290,43 @@ Caught 1 broken "done" claim(s); the agents fixed 100% on their own.
 
 That's the real output of the session in the GIF at the top: one stop blocked by Playwright and vitest, fixed on the next try. The log lives in `~/.local/state/doneguard/log.jsonl` (or `$XDG_STATE_HOME`) and stores only times, agent names, results and tool names: no code, no paths. Delete it to start over.
 
+## Show it
+
+**Every turn, in Claude Code.** When everything passes, doneguard says what it checked, so you see it working and not only when it blocks:
+
+<img src="https://raw.githubusercontent.com/abranchesia/doneguard/main/demo/receipt.gif" alt="Claude Code adds a comment to cart.ts and stops; under its answer: Stop says: doneguard: ✓ cheats · tsc · postgres · vitest · playwright (4.8 s); e2e passed, evidence in .doneguard/evidence/…" width="820">
+
+**In a pull request.** `doneguard report` runs the same checks and writes the result as markdown:
+
+```bash
+doneguard report --base origin/main | gh pr comment --body-file -       # a PR comment
+doneguard report --base origin/${{ github.base_ref }} >> $GITHUB_STEP_SUMMARY   # the summary of a GitHub Actions run
+```
+
+```markdown
+### ✅ Checked by doneguard
+
+| Check | Result | Time |
+|---|---|---|
+| cheats | ✓ passed | 0.0 s |
+| tsc | ✓ passed | 0.6 s |
+| postgres | ✓ passed | 0.9 s |
+| postgres setup | ✓ passed | 0.3 s |
+| vitest | ✓ passed | 0.7 s |
+| playwright | ✓ passed | 1.0 s |
+```
+
+When something fails, the report says what, and exits 1.
+
+**In your README.** [![checked by doneguard](https://img.shields.io/badge/checked%20by-doneguard-4ADE80)](https://github.com/abranchesia/doneguard)
+
+```markdown
+[![checked by doneguard](https://img.shields.io/badge/checked%20by-doneguard-4ADE80)](https://github.com/abranchesia/doneguard)
+```
+
 ## Day to day
 
-- **You don't run anything.** The hooks fire on their own when a session starts and every time the agent tries to stop.
+- **You don't run anything.** The hooks fire on their own when a session starts and every time the agent tries to stop. In Claude Code, a line under the agent's answer says what passed: `doneguard: ✓ cheats · tsc · vitest (3.1 s)`.
 - **When a check fails**, the agent gets the errors and keeps going. You see it fixing things instead of saying "done".
 - **If it still fails after 3 tries**, the agent stops (Claude Code shows `doneguard: checks still failing after 3 fix attempts`).
 - **After an e2e run**, the screenshots and videos are in `.doneguard/evidence/`, newest last. Open the report with `npx playwright show-report .doneguard/evidence/<run>/report`.
@@ -369,6 +403,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 |---|---|
 | `doneguard init [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet, otherwise list what's new) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
 | `doneguard check [--base REF] [files…]` | Run the checks on the given files, on your git changes, or on everything changed since the branch left `REF`, with a progress line per check. Exit 1 on failure. |
+| `doneguard report [--base REF] [files…]` | The same checks, written as markdown for a pull request comment or a CI summary. Exit 1 on failure. |
 | `doneguard doctor` | What the checks here need (tools, Docker, Playwright browsers, hooks) and what's missing. Exit 1 if a check would be skipped. |
 | `doneguard stats` | How many "done" claims were blocked, and how many the agents fixed. |
 | `doneguard --version` | The installed version. |

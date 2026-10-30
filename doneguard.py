@@ -7,6 +7,8 @@ Usage:
   doneguard check [--base REF] [files]
                            run the checks on the given files (default: the git changes, or everything
                            changed since the branch left REF); exit 1 on failure
+  doneguard report [--base REF] [files]
+                           the same checks, written as markdown for a pull request or a CI summary
   doneguard doctor         what the checks here need, and what's missing
   doneguard stats          how many "done" claims were blocked, and how many the agents fixed
   doneguard --version      the installed version
@@ -375,7 +377,7 @@ def known_errors(root):
 
 def run_checks(root, files, say=None, ref=None, known=None, flagged=None):
     """Returns ([(command, failure report)], number of checks that ran, notes for the user).
-    `say` gets a progress line per check. `ref`: the commit cheats are looked for since. `known`: errors
+    `say(ok, name, seconds, why="")` hears about each check as it ends (ok None: skipped, `why` says why). `ref`: the commit cheats are looked for since. `known`: errors
     whole-project checks reported at the start (from known_errors), so new ones anywhere count. `flagged`:
     cheats the agent was already told about (a set, updated here); None outside an agent session, where
     cheats are only reported."""
@@ -384,7 +386,7 @@ def run_checks(root, files, say=None, ref=None, known=None, flagged=None):
 
     def progress(ok, name, t0):
         if say:
-            say(f"  {'✓' if ok else '✗'} {name:<16} {time.time() - t0:5.1f}s")
+            say(ok, name, time.time() - t0)
 
     def bring_up():
         """Start the databases listed above the check about to run, then migrate and seed them. False if one failed."""
@@ -469,7 +471,7 @@ def run_checks(root, files, say=None, ref=None, known=None, flagged=None):
                 if code is None:
                     why = next((ln.strip(" ║│") for ln in out.splitlines() if any(m in ln for m in MISSING)), "tool not found" if out else "timed out")
                     if say:
-                        say(f"  – {tool(cmd):<16} skipped: {why[:70]}")
+                        say(None, tool(cmd), 0, why)
                     if mode == "e2e":
                         notes.append(f"e2e skipped ({why.removeprefix('Error: ')[:120]})")
                     continue
@@ -628,9 +630,9 @@ def hook(event, data):
         return reply(agent)
     since = float(since_f.read_text())
     refs, known, flagged = load(STATE / f"{sid}.refs", {}), load(STATE / f"{sid}.known", {}), set(load(flagged_f, []))
-    fails, ran, notes = [], 0, []
+    fails, ran, notes, events, t0 = [], 0, [], [], time.time()
     for root in roots:
-        f, n, msgs = run_checks(root, changed_since(root, since), ref=refs.get(str(root)), known=known.get(str(root)), flagged=flagged)
+        f, n, msgs = run_checks(root, changed_since(root, since), say=lambda *e: events.append(e), ref=refs.get(str(root)), known=known.get(str(root)), flagged=flagged)
         fails, ran, notes = fails + f, ran + n, notes + msgs
     flagged_f.write_text(json.dumps(sorted(flagged)))
     blocks = int(blocks_f.read_text()) if blocks_f.exists() else 0
@@ -642,7 +644,7 @@ def hook(event, data):
         return reply(agent, message(fails))
     mark(sid, roots)
     blocks_f.unlink(missing_ok=True)
-    return reply(agent, gave_up=bool(fails), notes=notes)
+    return reply(agent, gave_up=bool(fails), notes=[receipt(events, time.time() - t0)] * (bool(ran) and not fails) + notes)
 
 
 def common(counter):
@@ -1057,9 +1059,55 @@ def init(root, names=()):
             print(f"  {agent:<12} skipped: its config is not valid JSON, fix it and run init again")
             continue
         print(f"  {agent:<12} {file}" + (f" ({note})" if note else ""))
+    if checks and not conf:
+        print("Show that your agent is checked, with a README badge: https://github.com/abranchesia/doneguard#show-it")
     if not shutil.which("doneguard"):
         print("warning: `doneguard` is not on your PATH, so the hooks can't run. Install it: uv tool install doneguard")
     return 0
+
+
+def show(ok, name, secs, why=""):
+    """A progress line of `doneguard check`."""
+    print(f"  {'✓' if ok else '–' if ok is None else '✗'} {name:<16} " + (f"skipped: {why[:70]}" if ok is None else f"{secs:5.1f}s"))
+
+
+def receipt(events, secs):
+    """One line for the user when everything passed: which checks ran, and how long it took."""
+    names = dict.fromkeys(name for ok, name, *_ in events if ok and not name.endswith(" setup"))
+    return f"✓ {' · '.join(names)} ({secs:.1f} s)"
+
+
+def report(root, files, ref):
+    """`doneguard report`: run the checks and write the result as markdown, for a PR or a CI summary."""
+    events, t0 = [], time.time()
+    fails, _, notes = run_checks(root, files, say=lambda *e: events.append(e), ref=ref)
+    out = ["### " + ("❌ doneguard: checks failing" if fails else "✅ Checked by doneguard"), ""]
+    if events:
+        out += ["| Check | Result | Time |", "|---|---|---|"]
+        out += [f"| {name} | {'✓ passed' if ok else f'– skipped: {why[:80]}' if ok is None else '✗ failed'} | {'' if ok is None else f'{secs:.1f} s'} |"
+                for ok, name, secs, *rest in events for why in [(rest or [''])[0].replace("|", "\\|")]]
+    else:
+        out.append(f"No check applies to the {len(files)} changed file(s).")
+    out += [""] + [f"- {n}" for n in notes] + [""] * bool(notes)
+    shots = sorted(p for p in (root / EVIDENCE).glob("*/**/*.png") if p.stat().st_mtime >= t0 and "report" not in p.parts)
+    if shots:
+        out += ["<details><summary>Screenshots of the end-to-end tests</summary>", ""]
+        out += [f"- `{os.path.relpath(p, root)}`" for p in shots[:20]] + ["", "</details>", ""]
+    if fails:
+        out += ["<details><summary>What failed</summary>", "", "```text", "\n\n".join(t for _, t in fails), "```", "", "</details>", ""]
+    out.append(f"<sub>{len(files)} changed file(s) · {time.time() - t0:.1f} s · [doneguard](https://github.com/abranchesia/doneguard): your coding agent can't say \"done\" until the checks pass.</sub>")
+    print("\n".join(out))
+    return 1 if fails else 0
+
+
+def targets(root, args):
+    """The files and the git ref `check` and `report` work on: [--base REF] [files…]."""
+    ref = "HEAD"
+    if args[:1] == ["--base"] and len(args) > 1:  # in CI: everything the branch changed since it left <ref>
+        ref = (git(root, "merge-base", args[1], "HEAD") or args[1]).strip()
+        args = args[2:]
+    files = [str(Path(a).resolve()) for a in args] or git_changed(root, ref)
+    return files, ref if git(root, "rev-parse", "--verify", "-q", ref) else None
 
 
 def main(argv=None):
@@ -1091,13 +1139,13 @@ def main(argv=None):
         tmp.write_text(json.dumps(known))
         os.replace(tmp, state / f"{sid}.known")
         return 0
+    if cmd == "report":
+        root = find_root(Path.cwd().resolve())
+        return report(root, *targets(root, argv[1:]))
     if cmd == "check":
-        root, args, ref = find_root(Path.cwd().resolve()), argv[1:], "HEAD"
-        if args[:1] == ["--base"] and len(args) > 1:  # in CI: everything the branch changed since it left <ref>
-            ref = (git(root, "merge-base", args[1], "HEAD") or args[1]).strip()
-            args = args[2:]
-        files = [str(Path(a).resolve()) for a in args] or git_changed(root, ref)
-        fails, ran, notes = run_checks(root, files, say=print, ref=ref if git(root, "rev-parse", "--verify", "-q", ref) else None)
+        root = find_root(Path.cwd().resolve())
+        files, ref = targets(root, argv[1:])
+        fails, ran, notes = run_checks(root, files, say=show, ref=ref)
         for n in notes:
             print(f"doneguard: {n}.")
         print(("\n" if ran else "") + (message(fails) if fails else f"doneguard: all checks pass ({len(files)} changed file(s)).").rstrip())
