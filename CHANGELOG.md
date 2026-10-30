@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-30
+
 ### Added
 
 - **No shortcuts:** a `cheats` mode, which `init` adds. It sends back lines added in the session that skip or focus tests, silence the type checker or linter, or use `any`, plus test files deleted in the session. It compares against a git snapshot taken at the start, flags each finding once, and `doneguard check` only lists them.
@@ -38,6 +40,7 @@
 - `doneguard check` for CI and git hooks, and `doneguard stats`.
 - Detection for TypeScript, ESLint, Vitest, Jest, Python (ruff, pytest), Rust, Go, Java (Maven), PHP and Swift.
 
-[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/abranchesia/doneguard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/abranchesia/doneguard/releases/tag/v0.2.0
 [0.1.0]: https://github.com/abranchesia/doneguard/commit/42ef2b2
