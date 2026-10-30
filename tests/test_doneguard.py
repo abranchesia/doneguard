@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import time
 
 import pytest
@@ -158,7 +159,8 @@ def test_init_detects_again_once_an_empty_project_gets_a_stack(tmp_path):
     assert doneguard.load_conf(tmp_path) == []
     (tmp_path / "go.mod").write_text("module demo\n")
     doneguard.init(tmp_path, ["claude"])
-    assert doneguard.load_conf(tmp_path) == [["*.go", ".", "filter", "go vet ./..."], ["*.go", ".", "tests", "go test {test_dirs}"]]
+    assert doneguard.load_conf(tmp_path)[1:] == [["*.go", ".", "filter", "go vet ./..."], ["*.go", ".", "tests", "go test {test_dirs}"]]
+    assert doneguard.load_conf(tmp_path)[0][2] == "cheats"
 
 
 def test_init_is_idempotent_and_keeps_existing_settings(tmp_path):
@@ -303,9 +305,9 @@ def test_detect_databases_e2e_and_seed(tmp_path):
     (tmp_path / "playwright.config.ts").write_text('export default { webServer: { command: "npm run dev" } };\n')
     checks = doneguard.detect(tmp_path)
     modes = [c[2] for c in checks]
-    assert modes == ["postgres=postgres:16-alpine", "redis=redis:7", "files", "e2e"]
-    assert checks[0][3] == "npx --no -- prisma migrate deploy && npm run db:seed" and checks[1][3] == "-"
-    assert checks[3][1:] == (".", "e2e", "npx --no -- playwright test") and "*.css" in checks[3][0]
+    assert modes == ["cheats", "postgres=postgres:16-alpine", "redis=redis:7", "files", "e2e"]
+    assert checks[1][3] == "npx --no -- prisma migrate deploy && npm run db:seed" and checks[2][3] == "-"
+    assert checks[4][1:] == (".", "e2e", "npx --no -- playwright test") and "*.css" in checks[4][0]
 
 
 def test_detect_python_ruby_go_and_friends(tmp_path):
@@ -391,3 +393,72 @@ def test_detect_ignores_comments_odd_images_and_keeps_databases_last(tmp_path):
 def test_version_never_fails(capsys):
     assert doneguard.main(["--version"]) == 0
     assert capsys.readouterr().out.startswith("doneguard ")
+
+
+def repo(root, files):
+    """A git repo with these files committed; returns the commit."""
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text)
+    g = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "init"]):
+        subprocess.run(g + args, cwd=root, check=True)
+    return doneguard.snapshot(root)
+
+
+def test_cheats_are_flagged_once_then_only_reported(tmp_path):
+    root = project(tmp_path / "p", "* | . | cheats | -\n")
+    ref = repo(root, {"src/cart.ts": "export const a = 1;\n", "src/cart.test.ts": "test('a', () => {});\n", "src/old.test.ts": "test('b', () => {});\n"})
+    (root / "src/cart.ts").write_text("export const a = 1;\n// @ts-ignore\nexport const b = (x as any) + skip();\n")
+    (root / "src/cart.test.ts").write_text("test('a', () => {});\ntest.skip('c', () => {});\n")
+    (root / "src/old.test.ts").unlink()
+    files = [str(root / "src/cart.ts"), str(root / "src/cart.test.ts")]
+    flagged = set()
+    ((_, report),), ran, _ = doneguard.run_checks(root, files, ref=ref, flagged=flagged)
+    assert ran == 1
+    assert "src/cart.ts:2  @ts-ignore" in report and "src/cart.ts:3  as any" in report
+    assert "src/cart.test.ts:2  test.skip" in report and "src/old.test.ts  deleted" in report
+    assert "skip()" not in report  # not a test file
+    fails, _, notes = doneguard.run_checks(root, files, ref=ref, flagged=flagged)
+    assert fails == [] and notes[0].startswith("kept after being told")
+    fails, _, notes = doneguard.run_checks(root, files, ref=ref)  # doneguard check: report, don't fail
+    assert fails == [] and notes[0].startswith("cheats: ")
+
+
+def test_cheat_groups_can_be_turned_off(tmp_path):
+    root = project(tmp_path / "p", "* | . | cheats | skips\n")
+    ref = repo(root, {"a.ts": ""})
+    (root / "a.ts").write_text("// eslint-disable-next-line\nconst x = 1 as any;\n")
+    assert doneguard.run_checks(root, [str(root / "a.ts")], ref=ref, flagged=set())[0] == []
+
+
+def test_new_errors_in_untouched_files_count_old_ones_dont(tmp_path):
+    out = tmp_path / "out.txt"
+    out.write_text("src/old.ts(1,1): error TS1: old\n")
+    root = project(tmp_path / "p", f"*.ts | . | filter | cat {out}\n", ["src/a.ts", "src/old.ts", "src/caller.ts"])
+    known = doneguard.known_errors(root)
+    out.write_text("src/old.ts(9,9): error TS1: old\nsrc/caller.ts(4,2): error TS2345: wrong type\n")
+    ((_, report),), _, _ = doneguard.run_checks(root, [str(root / "src/a.ts")], known=known)
+    assert report.endswith("New errors in files you didn't change (your change caused them):\nsrc/caller.ts(4,2): error TS2345: wrong type")
+    assert "TS1: old" not in report
+
+
+def test_a_session_remembers_its_snapshot_and_its_flags(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path / "p", "*.py | . | cheats | -\n")
+    repo(root, {"tests/test_a.py": "def test_a(): pass\n"})
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(root))
+    doneguard.hook("start", {"session_id": "s7"})
+    touch_later(root / "tests/test_a.py")
+    (root / "tests/test_a.py").write_text("import pytest\n@pytest.mark.skip\ndef test_a(): pass\n")
+    os.utime(root / "tests/test_a.py", (time.time() + 5, time.time() + 5))
+    doneguard.hook("verify", {"session_id": "s7"})
+    assert "@pytest.mark.skip" in json.loads(capsys.readouterr().out)["reason"]
+    doneguard.hook("verify", {"session_id": "s7"})
+    assert "kept after being told" in json.loads(capsys.readouterr().out)["systemMessage"]
+
+
+def test_doctor_names_what_is_missing(tmp_path, capsys):
+    project(tmp_path, "*.py | . | files | no-such-linter-xyz\n*.py | . | weird | x\n")
+    assert doneguard.doctor(tmp_path) == 1
+    out = capsys.readouterr().out
+    assert "✗ no-such-linter-xyz: not found" in out and "✗ mode `weird`" in out and "hooked into no agent" in out

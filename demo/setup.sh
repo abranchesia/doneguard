@@ -115,7 +115,7 @@ test("two mugs cost $20.00", async ({ page }) => {
 });
 TS
   npm install --silent --no-audit --no-fund
-  npx playwright install chromium >/dev/null
+  npx playwright install ${CI:+--with-deps} chromium >/dev/null  # CI: Linux needs the system libraries too
   docker pull -q postgres:17-alpine >/dev/null
   git init -q && git add -A && git -c user.name=demo -c user.email=demo@example.com commit -qm init
 }

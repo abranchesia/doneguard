@@ -4,7 +4,10 @@
 Usage:
   doneguard init [agents]  detect the stack, write .doneguard.conf and hook into your agents
                            (default: the agents found here; or name them, or "all")
-  doneguard check [files]  run the checks on the given files (default: git changes); exit 1 on failure
+  doneguard check [--base REF] [files]
+                           run the checks on the given files (default: the git changes, or everything
+                           changed since the branch left REF); exit 1 on failure
+  doneguard doctor         what the checks here need, and what's missing
   doneguard stats          how many "done" claims were blocked, and how many the agents fixed
   doneguard --version      the installed version
   doneguard start          hook, session start: mark the time
@@ -19,10 +22,14 @@ The hooks read the event JSON on stdin and answer in each agent's format.
   dir      where the command runs, relative to the root; @<file> = nearest folder holding <file>
            (@package.json runs each package of a monorepo in its own folder)
   mode     files    run `command <changed files>`; fail on non-zero exit
-           filter   run `command`; fail only on output lines that cite a changed file
+           filter   run `command`; fail on output lines that cite a changed file, and on errors in
+                    other files that weren't there when the session started
            tests    replace {tests} (or {test_dirs}) with the tests related to the changed files;
                     skip if none
            command  run `command`; fail on non-zero exit
+           cheats   fail on lines added this session that skip tests, silence checkers or use any,
+                    and on deleted tests; `command` lists the groups: skips, silencers, any,
+                    deleted-tests (- for all). Each one is flagged once; `check` only reports them.
            e2e      run `command` and keep screenshots, videos and traces in .doneguard/evidence/
                     ({evidence} is that run's folder); fail on non-zero exit
            postgres, mysql, redis, mongo (optionally =<image>)
@@ -84,6 +91,25 @@ export default {{
 }};
 """
 TEST_NAME = re.compile(r"^test_|_test\.|_spec\.|\.(test|spec)\.|Tests?\.\w+$")
+TEST_DIRS = {"test", "tests", "spec", "__tests__", "e2e", "Tests"}
+# Shortcuts an agent takes to make checks pass without fixing anything, by group (mode `cheats`).
+CHEATS = {
+    "skips": re.compile(  # only looked for in test files
+        r"\b(?:it|test|describe|context|suite)\.(?:skip|only|todo|fixme)\b|\b(?:xit|xdescribe|xcontext|xtest|fit|fdescribe)\s*\("
+        r"|@pytest\.mark\.(?:skip|skipif|xfail)\b|\bpytest\.skip\(|@unittest\.skip|\.skipTest\(|\bt\.Skip(?:Now|f)?\("
+        r"|#\[ignore\]|@Disabled\b|@Ignore\b|markTest(?:Skipped|Incomplete)\(|^\s*(?:skip|pending)\b"),
+    "silencers": re.compile(
+        r"@ts-(?:ignore|nocheck|expect-error)|eslint-disable|biome-ignore|#\s*type:\s*ignore|#\s*noqa|pylint:\s*disable"
+        r"|pyright:\s*ignore|//\s*nolint|#!?\[allow\(|@SuppressWarnings|rubocop:disable|@phpstan-ignore|@psalm-suppress|swiftlint:disable"),
+    "any": re.compile(r"\bas\s+any\b|:\s*any\b(?!\s*[A-Za-z_])|<any>"),  # only in TypeScript files
+}
+WHY = {
+    "skips": "skips or focuses a test: that hides the failure instead of fixing it",
+    "silencers": "silences the checker: fix what it reports instead",
+    "any": "types it as any: give it its real type",
+    "deleted-tests": "deletes a test file: a failing test gets fixed, not removed",
+}
+CITES_FILE = re.compile(r"[\w./@-]+\.\w+(?:\(\d+|:\[?\d+)")  # a file position: a.ts(3,1), ./a.go:3:2, A.java:[5,9]
 HEADER = "# doneguard checks, one per line: <globs> | <dir> | <mode> | <command>\n# Modes: files, filter, tests, command, e2e, postgres, mysql, redis, mongo. Details: doneguard --help\n"
 START, VERIFY = "doneguard start", "doneguard verify"
 WRAPPER = ".doneguard.playwright.config.ts"
@@ -151,7 +177,7 @@ def cites(line, rel, path):
 
 def tool(cmd):
     """Short name of the tool a check runs: `npx --no -- vitest related` is vitest."""
-    words = [w for w in cmd.split() if not w.startswith("-") and w not in ("npx", "uv", "uvx", "run", "bundle", "exec")]
+    words = [w for w in cmd.split() if not w.startswith("-") and "=" not in w and w not in ("npx", "uv", "uvx", "run", "bundle", "exec")]
     return Path(words[0]).name if words else cmd
 
 
@@ -268,9 +294,91 @@ def evidence_note(root, ev):
     return "\n".join(lines)
 
 
-def run_checks(root, files, say=None):
+def git(root, *args):
+    """stdout of a git command run in `root`, or None if it fails (no git, not a repo, unknown ref)."""
+    try:
+        r = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def snapshot(root):
+    """A commit with the working tree as it is now (tracked files), to compare with later. None without git."""
+    ref = (git(root, "stash", "create") or "").strip()  # writes nothing to the stash, the index or the files
+    return ref or (git(root, "rev-parse", "--verify", "-q", "HEAD") or "").strip() or None
+
+
+def is_test(path):
+    p = Path(path)
+    return bool(TEST_NAME.search(p.name)) or bool(TEST_DIRS & set(p.parts[:-1]))
+
+
+def added_lines(root, ref, rels):
+    """{path: [(line number, text)]} for the lines added since commit `ref` (new files: all their lines)."""
+    tracked = set((git(root, "ls-tree", "-r", "--name-only", ref, "--", *rels) or "").splitlines()) if rels else set()
+    diff = git(root, "diff", "--no-color", "--no-ext-diff", "--unified=0", "--relative", ref, "--", *sorted(tracked)) or "" if tracked else ""
+    out, path, n = {}, None, 0
+    for ln in diff.splitlines():
+        if ln.startswith("+++ "):
+            path = ln[6:] if ln.startswith("+++ b/") else None
+        elif ln.startswith("@@"):
+            n = int(re.search(r"\+(\d+)", ln)[1])
+        elif ln.startswith("+") and path:
+            out.setdefault(path, []).append((n, ln[1:]))
+            n += 1
+    for r in rels:
+        f = root / r
+        if r not in tracked and f.is_file() and f.stat().st_size < 1_000_000 and b"\0" not in f.read_bytes()[:8000]:
+            out[r] = list(enumerate(read(f).splitlines(), 1))
+    return out
+
+
+def find_cheats(root, ref, files, groups):
+    """[(path, line, group, what)]: added lines that skip tests, silence checkers or use any, and deleted tests."""
+    found = []
+    for path, lines in added_lines(root, ref, [os.path.relpath(f, root) for f in files]).items():
+        for n, text in lines:
+            for g, rx in CHEATS.items():
+                m = rx.search(text) if g in groups and (g != "skips" or is_test(path)) and (g != "any" or path.endswith((".ts", ".tsx", ".mts", ".cts"))) else None
+                if m:
+                    found.append((path, n, g, m.group(0).strip()))
+    if "deleted-tests" in groups:
+        gone = (git(root, "diff", "--name-only", "--relative", "--diff-filter=D", ref) or "").splitlines()
+        found += [(p, 0, "deleted-tests", "deleted") for p in gone if is_test(p)]
+    return found
+
+
+def errors_in(lines):
+    """Output lines that cite a file position, positions removed: moving code around doesn't make an error new."""
+    return [re.sub(r"\(\d+,\d+\)|:\[\d+,\d+\]|:\d+(?::\d+)?", "", ln).strip() for ln in lines if CITES_FILE.search(ln)]
+
+
+def bases(root, folder):
+    """Every folder a check can run in: `folder`, or for @<file> each folder (two levels deep) holding <file>."""
+    if not folder.startswith("@"):
+        return [(root / folder).resolve()]
+    dirs = [root] + [d for d in root.glob("*") if d.is_dir()] + [d for d in root.glob("*/*") if d.is_dir()]
+    return [d for d in dirs if (d / folder[1:]).exists() and not (SKIP_DIRS | {".git"}) & set(d.relative_to(root).parts)]
+
+
+def known_errors(root):
+    """The errors whole-project checks (mode filter) report right now, per command and folder."""
+    known = {}
+    for _, folder, mode, cmd in load_conf(root):
+        for base in bases(root, folder) if mode == "filter" else []:
+            code, out = sh(cmd, base)
+            if code is not None:
+                known[f"{cmd}\0{base}"] = errors_in(out.splitlines())
+    return known
+
+
+def run_checks(root, files, say=None, ref=None, known=None, flagged=None):
     """Returns ([(command, failure report)], number of checks that ran, notes for the user).
-    `say` gets a progress line per check."""
+    `say` gets a progress line per check. `ref`: the commit cheats are looked for since. `known`: errors
+    whole-project checks reported at the start (from known_errors), so new ones anywhere count. `flagged`:
+    cheats the agent was already told about (a set, updated here); None outside an agent session, where
+    cheats are only reported."""
     fails, ran, notes = [], 0, []
     env, pending, started, containers, down = {}, [], set(), [], False
 
@@ -323,6 +431,21 @@ def run_checks(root, files, say=None):
             if mode.partition("=")[0] in SERVICES:
                 pending += [(mode, cmd, base) for base in groups]  # started only if a check below runs
                 continue
+            if mode == "cheats":
+                for base, hits in groups.items() if ref else []:
+                    t0, wanted = time.time(), set(re.split(r"[\s,]+", cmd.strip())) - {"", "-"} or set(WHY)
+                    found = find_cheats(base, ref, hits, wanted)
+                    ran += 1
+                    new = [c for c in found if f"{c[0]}:{c[3]}" not in flagged] if flagged is not None else []
+                    progress(not new, "cheats", t0)
+                    lines = [f"{p}{f':{n}' if n else ''}  {what}  {WHY[g]}" for p, n, g, what in found]
+                    if new:
+                        flagged.update(f"{c[0]}:{c[3]}" for c in found)
+                        fails.append(("cheats", f"[{os.path.relpath(base, root)}] cheats: changes that hide failures instead of fixing them\n" + "\n".join(lines[:20])
+                                      + "\nRemove them and fix the cause. If one really has to stay, keep it and tell the user why in your final answer: doneguard flags each one only once."))
+                    elif found:
+                        notes.append(("kept after being told: " if flagged is not None else "cheats: ") + "; ".join(lines[:5]))
+                continue
             for base, hits in groups.items():
                 rels = [os.path.relpath(h, base) for h in hits]
                 full = cmd
@@ -354,9 +477,19 @@ def run_checks(root, files, say=None):
                 where = os.path.relpath(base, root)
                 if mode == "filter":
                     bad = list(dict.fromkeys(ln for ln in out.splitlines() if any(cites(ln, r, h) for r, h in zip(rels, hits))))
-                    progress(not bad, tool(cmd), t0)
-                    if bad:
-                        fails.append((cmd, f"[{where}] {cmd}\n" + "\n".join(bad[:20])))
+                    left, new = Counter((known or {}).get(f"{cmd}\0{base}", [])), []
+                    for ln in (out.splitlines() if known and f"{cmd}\0{base}" in known else []):
+                        k = (errors_in([ln]) or [None])[0]
+                        if k is None or ln in bad:
+                            continue
+                        if left[k]:
+                            left[k] -= 1
+                        elif ln not in new:
+                            new.append(ln)
+                    progress(not (bad or new), tool(cmd), t0)
+                    if bad or new:
+                        also = ["New errors in files you didn't change (your change caused them):", *new[:20]] if new else []
+                        fails.append((cmd, f"[{where}] {cmd}\n" + "\n".join(bad[:20] + also)))
                     continue
                 progress(code == 0, tool(cmd), t0)
                 if code != 0 and ev:  # the evidence paths are listed once, below
@@ -407,12 +540,11 @@ def changed_since(root, since):
     return out
 
 
-def git_changed(root):
+def git_changed(root, ref="HEAD"):
+    """Files changed since `ref`, plus untracked ones."""
     out = set()
-    for cmd in (["git", "diff", "--name-only", "--relative", "HEAD"], ["git", "ls-files", "-o", "--exclude-standard"]):
-        r = subprocess.run(cmd, cwd=root, capture_output=True, text=True, check=False)
-        if r.returncode == 0:
-            out |= {str(root / ln) for ln in r.stdout.splitlines() if ln}
+    for args in (["diff", "--name-only", "--relative", ref], ["ls-files", "-o", "--exclude-standard"]):
+        out |= {str(root / ln) for ln in (git(root, *args) or "").splitlines() if ln}
     return sorted(out)
 
 
@@ -459,25 +591,48 @@ def log(agent, sid, result, fails):
         pass
 
 
+def load(f, default):
+    try:
+        return json.loads(f.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def mark(sid, roots):
+    """Start of a session, or of the next task after a stop: note the time and a git snapshot per project, and
+    record (in the background, the agent isn't kept waiting) the errors whole-project checks already report."""
+    (STATE / f"{sid}.since").write_text(str(time.time()))
+    (STATE / f"{sid}.refs").write_text(json.dumps({str(r): snapshot(r) for r in roots}))
+    if any(row[2] == "filter" for r in roots for row in load_conf(r)):
+        try:
+            subprocess.Popen([sys.executable, os.path.abspath(__file__), "_known", str(STATE), sid, *map(str, roots)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            pass
+
+
 def hook(event, data):
     agent = agent_of(data)
     sid = data.get("conversationId") or data.get("conversation_id") or data.get("session_id") or data.get("sessionId") or "default"
     sid = re.sub(r"[^\w-]", "_", str(sid))
     STATE.mkdir(parents=True, exist_ok=True)
-    since_f, blocks_f = STATE / f"{sid}.since", STATE / f"{sid}.blocks"
+    since_f, blocks_f, flagged_f = STATE / f"{sid}.since", STATE / f"{sid}.blocks", STATE / f"{sid}.flagged"
+    env_root = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("GEMINI_PROJECT_DIR") or os.environ.get("DEVIN_PROJECT_DIR")
+    paths = data.get("workspacePaths") or data.get("workspace_roots") or [env_root or data.get("cwd") or os.getcwd()]
+    roots = sorted({find_root(Path(p).resolve()) for p in paths})
+    roots = [r for r in roots if (r / CONF).exists()]
     if event == "start" or not since_f.exists():
-        since_f.write_text(str(time.time()))
+        mark(sid, roots)
         return reply(agent)
     if data.get("status") in ("aborted", "error") or data.get("terminationReason", "NO_TOOL_CALL") != "NO_TOOL_CALL":
         return reply(agent)
     since = float(since_f.read_text())
-    env_root = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("GEMINI_PROJECT_DIR") or os.environ.get("DEVIN_PROJECT_DIR")
-    roots = data.get("workspacePaths") or data.get("workspace_roots") or [env_root or data.get("cwd") or os.getcwd()]
+    refs, known, flagged = load(STATE / f"{sid}.refs", {}), load(STATE / f"{sid}.known", {}), set(load(flagged_f, []))
     fails, ran, notes = [], 0, []
-    for root in {find_root(Path(p).resolve()) for p in roots}:
-        if (root / CONF).exists():
-            f, n, msgs = run_checks(root, changed_since(root, since))
-            fails, ran, notes = fails + f, ran + n, notes + msgs
+    for root in roots:
+        f, n, msgs = run_checks(root, changed_since(root, since), ref=refs.get(str(root)), known=known.get(str(root)), flagged=flagged)
+        fails, ran, notes = fails + f, ran + n, notes + msgs
+    flagged_f.write_text(json.dumps(sorted(flagged)))
     blocks = int(blocks_f.read_text()) if blocks_f.exists() else 0
     blocked = bool(fails) and blocks < MAX_BLOCKS
     if ran:
@@ -485,7 +640,7 @@ def hook(event, data):
     if blocked:
         blocks_f.write_text(str(blocks + 1))
         return reply(agent, message(fails))
-    since_f.write_text(str(time.time()))
+    mark(sid, roots)
     blocks_f.unlink(missing_ok=True)
     return reply(agent, gave_up=bool(fails), notes=notes)
 
@@ -692,7 +847,72 @@ def detect(root, notes=None):
         checks.append((JS, at(deno), "tests", "deno test -A {tests}"))
     if found("Package.swift"):
         checks.append(("*.swift", at("Package.swift"), "filter", "swift build 2>&1 | grep 'error:'"))
-    return checks + late
+    # Agents that "pass" by skipping a test or silencing the checker get caught too, whatever the stack.
+    return [("*", ".", "cheats", "skips,silencers,any,deleted-tests")] * bool(checks or late) + checks + late
+
+
+def runnable(cmd, dirs):
+    """Whether the program a command starts can be found: on PATH, in node_modules/.bin, .venv/bin, or as a path."""
+    words = [w for w in cmd.split() if "=" not in w and not w.startswith("-") and w not in ("npx", "uv", "uvx", "run", "bundle", "exec")]
+    prog = words[0] if words else ""
+    if "/" in prog:
+        return any((d / prog).exists() for d in dirs)
+    homes = {p for d in dirs for p in (d, *d.parents)}
+    return bool(shutil.which(prog)) or any((h / sub / prog).exists() for h in homes for sub in ("node_modules/.bin", ".venv/bin", "vendor/bin"))
+
+
+def doctor(root):
+    """What the checks in this project need, and whether it's there. Returns 1 when a check would be skipped."""
+    bad = []
+
+    def say(ok, what, fix=""):
+        print(f"  {'✓' if ok else '✗'} {what}" + ("" if ok or not fix else f": {fix}"))
+        if not ok:
+            bad.append(what)
+
+    try:
+        from importlib.metadata import version
+        ver = version("doneguard")
+    except ImportError:
+        ver = "from source"
+    print(f"doneguard {ver} · Python {sys.version.split()[0]} · {root}")
+    say(bool(shutil.which("doneguard")), "doneguard on your PATH", "the hooks call it by name: uv tool install doneguard")
+    say(git(root, "rev-parse", "--git-dir") is not None, "git repository", "without it, no cheat checks and no .gitignore")
+    lines = [ln for ln in read(root / CONF).splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    rows = load_conf(root)
+    say(bool(rows), f"{CONF} with {len(rows)} check(s)", "run doneguard init")
+    for ln in lines:
+        if len(ln.split(" | ", 3)) != 4:
+            say(False, f"line `{ln.strip()[:60]}`", "it needs 4 fields: <globs> | <dir> | <mode> | <command>")
+    docker_up = None
+    for _, folder, mode, cmd in rows:
+        kind, _, image = mode.partition("=")
+        dirs = bases(root, folder) or [root]
+        if kind in SERVICES:
+            if docker_up is None:
+                docker_up = docker("info")[0] == 0
+            image = image or SERVICES[kind][0]
+            say(docker_up, f"{kind}: Docker", "not running: this database and the checks below it are skipped")
+            if docker_up and docker("image", "inspect", image)[0] != 0:
+                print(f"  · {image} isn't pulled yet: the first run pulls it (or now: docker pull {image})")
+            if cmd.strip() not in ("", "-"):
+                say(runnable(cmd, dirs), f"{kind} setup: {tool(cmd)}", "not found")
+        elif mode == "cheats":
+            say(True, "cheats")
+        elif mode not in ("files", "filter", "tests", "command", "e2e"):
+            say(False, f"mode `{mode}`", "unknown: files, filter, tests, command, e2e, cheats, postgres, mysql, redis or mongo")
+        else:
+            say(runnable(cmd, dirs), tool(cmd), "not found, so this check is skipped")
+            if mode == "e2e" and "playwright" in cmd:
+                out = sh("npx --no -- playwright install --dry-run chromium", dirs[0])[1]
+                missing = [p for p in re.findall(r"Install location:\s+(\S+)", out) if not Path(p).exists()]
+                say(not missing, "Playwright browsers", "missing, run: npx playwright install chromium")
+    hooked = [a for a, (f, _, _) in HOOKS.items() if "doneguard" in read(root / f)]
+    hooked += [a for a, f in (("kiro", ".kiro/hooks/doneguard.json"), ("opencode", ".opencode/plugins/doneguard.js")) if (root / f).exists()]
+    hooked += ["aider"] * ("doneguard" in read(root / ".aider.conf.yml"))
+    say(bool(hooked), "hooked into " + (", ".join(hooked) or "no agent"), "run doneguard init")
+    print(f"\n{len(bad)} problem(s)." if bad else "\nAll set.")
+    return 1 if bad else 0
 
 
 def group(cmd, matcher=None, **extra):
@@ -855,6 +1075,8 @@ def main(argv=None):
         return init(Path.cwd().resolve(), argv[1:])
     if cmd == "stats":
         return stats()
+    if cmd == "doctor":
+        return doctor(find_root(Path.cwd().resolve()))
     if cmd in ("--version", "-V", "version"):
         try:
             from importlib.metadata import version
@@ -862,10 +1084,20 @@ def main(argv=None):
         except ImportError:  # PackageNotFoundError too: run from a checkout, not installed
             print("doneguard (not installed: run from source)")
         return 0
+    if cmd == "_known":  # background job started by `mark`: _known <state dir> <session> <roots…>
+        state, sid, roots = Path(argv[1]), argv[2], argv[3:]
+        known = {r: known_errors(Path(r)) for r in roots}
+        tmp = state / f"{sid}.known.tmp"
+        tmp.write_text(json.dumps(known))
+        os.replace(tmp, state / f"{sid}.known")
+        return 0
     if cmd == "check":
-        root = find_root(Path.cwd().resolve())
-        files = [str(Path(a).resolve()) for a in argv[1:]] or git_changed(root)
-        fails, ran, notes = run_checks(root, files, say=print)
+        root, args, ref = find_root(Path.cwd().resolve()), argv[1:], "HEAD"
+        if args[:1] == ["--base"] and len(args) > 1:  # in CI: everything the branch changed since it left <ref>
+            ref = (git(root, "merge-base", args[1], "HEAD") or args[1]).strip()
+            args = args[2:]
+        files = [str(Path(a).resolve()) for a in args] or git_changed(root, ref)
+        fails, ran, notes = run_checks(root, files, say=print, ref=ref if git(root, "rev-parse", "--verify", "-q", ref) else None)
         for n in notes:
             print(f"doneguard: {n}.")
         print(("\n" if ran else "") + (message(fails) if fails else f"doneguard: all checks pass ({len(files)} changed file(s)).").rstrip())
