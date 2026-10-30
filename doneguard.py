@@ -2,8 +2,10 @@
 """doneguard: your coding agent can't say "done" until the checks pass.
 
 Usage:
-  doneguard init [agents]  detect the stack, write .doneguard.conf and hook into your agents
-                           (default: the agents found here; or name them, or "all")
+  doneguard init [--update] [agents]
+                           detect the stack, write .doneguard.conf and hook into your agents
+                           (default: the agents found here; or name them, or "all"). With a
+                           .doneguard.conf already there, --update adds the checks it doesn't have
   doneguard check [--base REF] [files]
                            run the checks on the given files (default: the git changes, or everything
                            changed since the branch left REF); exit 1 on failure
@@ -853,6 +855,29 @@ def detect(root, notes=None):
     return [("*", ".", "cheats", "skips,silencers,any,deleted-tests")] * bool(checks or late) + checks + late
 
 
+def installed_version():
+    try:
+        from importlib.metadata import version
+        return version("doneguard")
+    except ImportError:  # PackageNotFoundError too: run from a checkout, not installed
+        return None
+
+
+def latest_version():
+    """The newest doneguard on PyPI, or None when offline. Only `doctor` asks, and only when you run it."""
+    try:
+        from urllib.request import urlopen
+        with urlopen("https://pypi.org/pypi/doneguard/json", timeout=3) as r:
+            return json.load(r)["info"]["version"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def newer(a, b):
+    """Whether version `a` comes after version `b` (plain X.Y.Z)."""
+    return tuple(map(int, re.findall(r"\d+", a)[:3])) > tuple(map(int, re.findall(r"\d+", b)[:3]))
+
+
 def runnable(cmd, dirs):
     """Whether the program a command starts can be found: on PATH, in node_modules/.bin, .venv/bin, or as a path."""
     words = [w for w in cmd.split() if "=" not in w and not w.startswith("-") and w not in ("npx", "uv", "uvx", "run", "bundle", "exec")]
@@ -872,12 +897,11 @@ def doctor(root):
         if not ok:
             bad.append(what)
 
-    try:
-        from importlib.metadata import version
-        ver = version("doneguard")
-    except ImportError:
-        ver = "from source"
-    print(f"doneguard {ver} · Python {sys.version.split()[0]} · {root}")
+    ver = installed_version()
+    print(f"doneguard {ver or 'from source'} · Python {sys.version.split()[0]} · {root}")
+    latest = latest_version() if ver else None
+    if latest and newer(latest, ver):
+        print(f"  ↑ doneguard {latest} is out: uv tool upgrade doneguard (or pipx upgrade doneguard), then doneguard init --update")
     say(bool(shutil.which("doneguard")), "doneguard on your PATH", "the hooks call it by name: uv tool install doneguard")
     say(git(root, "rev-parse", "--git-dir") is not None, "git repository", "without it, no cheat checks and no .gitignore")
     lines = [ln for ln in read(root / CONF).splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
@@ -1019,8 +1043,39 @@ def table(checks):
     return [" | ".join([*(c[i].ljust(widths[i]) for i in range(3)), c[3]]) for c in checks]
 
 
+def add_checks(root, detected, new):
+    """Write newly detected checks into an existing .doneguard.conf, each where it works: cheats on top, a
+    database right above the first check of yours that needs it, other checks above the databases."""
+    lines = (root / CONF).read_text().splitlines()
+    rows = {}  # line number -> (mode, command)
+    for i, ln in enumerate(lines):
+        parts = [p.strip() for p in ln.split(" | ", 3)]
+        if len(parts) == 4 and not ln.lstrip().startswith("#"):
+            rows[i] = (parts[2], parts[3])
+    top = next((i for i, ln in enumerate(lines) if ln.strip() and not ln.lstrip().startswith("#")), len(lines))
+    first_db = next((i for i, (m, _) in rows.items() if m.partition("=")[0] in SERVICES), len(lines))
+    late = next((k for k, c in enumerate(detected) if c[2].partition("=")[0] in SERVICES), len(detected))
+    at = {}  # line number to insert before -> checks
+    for c in new:
+        k = detected.index(c)
+        if c[2] == "cheats":
+            i = top
+        elif k < late:
+            i = first_db
+        elif c[2].partition("=")[0] in SERVICES:
+            needs = {(d[2], d[3]) for d in detected[k + 1:]}  # its stack's tests and e2e
+            i = next((i for i, key in rows.items() if key in needs), len(lines))
+        else:
+            i = len(lines)
+        at.setdefault(i, []).append(" | ".join(c))
+    out = [ln for i in range(len(lines) + 1) for ln in at.get(i, []) + lines[i:i + 1]]
+    (root / CONF).write_text("\n".join(out) + "\n")
+
+
 def init(root, names=()):
-    names = list(AGENTS) if list(names) == ["all"] else list(names)
+    update = "--update" in names
+    names = [n for n in names if n != "--update"]
+    names = list(AGENTS) if names == ["all"] else names
     names = names or [a for a, (bins, hint) in AGENTS.items() if any(shutil.which(b) for b in bins) or (root / hint).exists()] or ["claude"]
     unknown = sorted(set(names) - set(AGENTS))
     if unknown:
@@ -1031,7 +1086,12 @@ def init(root, names=()):
     if conf:
         have = {(r[2], r[3]) for r in conf}
         shown = [c for c in checks if (c[2], c[3]) not in have]
-        print(f"{CONF} already has checks, leaving it as is." + (" Detected here but not in it (add the ones you want):" if shown else ""))
+        if update and shown:
+            add_checks(root, checks, shown)
+            print(f"added {len(shown)} check(s) to {CONF}, each in its place:")
+        else:
+            print(f"{CONF} already has checks, leaving it as is."
+                  + (" Detected here but not in it (add them with doneguard init --update, or by hand):" if shown else ""))
     else:
         shown = checks
         (root / CONF).write_text(HEADER + "".join(ln + "\n" for ln in table(checks)))
@@ -1126,11 +1186,7 @@ def main(argv=None):
     if cmd == "doctor":
         return doctor(find_root(Path.cwd().resolve()))
     if cmd in ("--version", "-V", "version"):
-        try:
-            from importlib.metadata import version
-            print(f"doneguard {version('doneguard')}")
-        except ImportError:  # PackageNotFoundError too: run from a checkout, not installed
-            print("doneguard (not installed: run from source)")
+        print(f"doneguard {installed_version() or '(not installed: run from source)'}")
         return 0
     if cmd == "_known":  # background job started by `mark`: _known <state dir> <session> <roots…>
         state, sid, roots = Path(argv[1]), argv[2], argv[3:]

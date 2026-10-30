@@ -100,7 +100,7 @@ doneguard --help
 - **Try it without installing:** `uvx doneguard init`, then `uvx doneguard check`. The agent hooks call `doneguard` by name, so for them it has to be installed and on your `PATH`.
 - **Shell can't find `doneguard`?** Run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal.
 - **A check isn't running?** `doneguard doctor` lists what each check needs (tools, Docker, browsers, hooks) and what's missing.
-- **Upgrade:** `uv tool upgrade doneguard` (or `pipx upgrade doneguard`).
+- **Upgrade:** `uv tool upgrade doneguard` (or `pipx upgrade doneguard`). The hooks pick up the new version on the agent's next stop. Then run `doneguard init --update` in each project to add the checks the new version brings. `uv tool list --outdated` and `doneguard doctor` tell you when there's a new one. To get an email, watch the repo's releases.
 
 Requirements: Python 3.9+ (only to run doneguard itself), macOS or Linux, and the tools your checks call (`tsc`, `ruff`, `cargo`…) installed in the project. git is optional; with it, change detection respects `.gitignore`. Docker is optional, for [test databases](#tests-that-need-a-database). Playwright browsers are optional, for [end-to-end tests](#end-to-end-tests-with-evidence).
 
@@ -122,7 +122,7 @@ Then restart your agent so it loads the hooks, and:
 
 Using an agent that `init` didn't find (or several)? Name them: `doneguard init codex gemini`, or `doneguard init all`.
 
-Already have a `.doneguard.conf`? `init` never rewrites it, but it lists what it detects now and the file doesn't have yet, so upgrading is copy and paste.
+Already have a `.doneguard.conf`? `init` never rewrites it, but it lists what it detects now and the file doesn't have yet. `doneguard init --update` adds those lines, each where it works: `cheats` on top, a database right above the tests that need it. Your lines and comments stay as they are.
 
 ## Start a new project from zero
 
@@ -335,7 +335,7 @@ When something fails, the report says what, and exits 1.
 
 ## Teams
 
-Commit `.doneguard.conf`. Each developer installs doneguard and runs `doneguard init`, which keeps the existing config and adds their hooks.
+Commit `.doneguard.conf`. Each developer installs doneguard and runs `doneguard init`, which keeps the existing config and adds their hooks. After an upgrade, one person runs `doneguard init --update` and commits the result.
 
 `.doneguard/` ignores itself, so evidence never lands in a commit by accident. To keep evidence in the repo (for review, or as a CI artifact), delete `.doneguard/.gitignore`.
 
@@ -401,7 +401,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 
 | Command | What it does |
 |---|---|
-| `doneguard init [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet, otherwise list what's new) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
+| `doneguard init [--update] [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet; otherwise list what's new, and with `--update` add it) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
 | `doneguard check [--base REF] [files…]` | Run the checks on the given files, on your git changes, or on everything changed since the branch left `REF`, with a progress line per check. Exit 1 on failure. |
 | `doneguard report [--base REF] [files…]` | The same checks, written as markdown for a pull request comment or a CI summary. Exit 1 on failure. |
 | `doneguard doctor` | What the checks here need (tools, Docker, Playwright browsers, hooks) and what's missing. Exit 1 if a check would be skipped. |
@@ -432,7 +432,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 
 **Does it catch edits the agent makes through shell commands?** Yes. It compares modification times, so `sed`, codegen and scripts count, not just the edit tool.
 
-**Does it send my code anywhere?** No. It runs your own tools on your machine. No network calls, no telemetry (Docker may pull a database image the first time). It's one file: [`doneguard.py`](https://github.com/abranchesia/doneguard/blob/main/doneguard.py).
+**Does it send my code anywhere?** No. It runs your own tools on your machine. No telemetry. The only network requests: Docker may pull a database image the first time, and `doneguard doctor`, when you run it, asks pypi.org for the latest version number. It's one file: [`doneguard.py`](https://github.com/abranchesia/doneguard/blob/main/doneguard.py).
 
 **How do I uninstall?** Remove the `doneguard` entries from your agent's hook config, delete `.doneguard.conf`, then `uv tool uninstall doneguard` (or `pipx uninstall doneguard`).
 

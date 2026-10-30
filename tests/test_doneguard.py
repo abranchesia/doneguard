@@ -482,3 +482,30 @@ def test_report_is_markdown_for_a_pull_request(tmp_path, monkeypatch, capsys):
     assert out.startswith("### ❌ doneguard: checks failing\n\n| Check | Result | Time |")
     assert "| true | ✓ passed |" in out and "| echo | ✗ failed |" in out and "| no-such-tool-xyz | – skipped: " in out
     assert "<summary>What failed</summary>" in out and "boom: assert 1 == 2" in out
+
+
+def test_init_update_puts_each_new_check_where_it_works(tmp_path, capsys):
+    (tmp_path / "package.json").write_text(json.dumps({"dependencies": {"pg": "8"}, "devDependencies": {"vitest": "3", "@playwright/test": "1", "typescript": "5"}}))
+    (tmp_path / "tsconfig.json").write_text("{}")
+    (tmp_path / ".env").write_text("DATABASE_URL=postgres://localhost/dev\n")
+    (tmp_path / "playwright.config.ts").write_text("export default { webServer: {} };\n")
+    old = "# my checks\n*.ts,*.tsx | @package.json | filter | npx --no -- tsc --noEmit --pretty false -p .\n*.js,*.jsx,*.ts,*.tsx | @package.json | files | npx --no -- vitest related --run --passWithNoTests\n"
+    (tmp_path / doneguard.CONF).write_text(old)
+    doneguard.init(tmp_path, ["--update", "claude"])
+    assert "added 3 check(s)" in capsys.readouterr().out
+    modes = [r[2] for r in doneguard.load_conf(tmp_path)]
+    assert modes == ["cheats", "filter", "postgres", "files", "e2e"]  # the database lands right above vitest
+    assert (tmp_path / doneguard.CONF).read_text().startswith("# my checks\n")
+    doneguard.init(tmp_path, ["--update", "claude"])
+    assert len(doneguard.load_conf(tmp_path)) == 5
+
+
+def test_doctor_says_when_a_new_version_is_out(tmp_path, monkeypatch, capsys):
+    project(tmp_path, "*.py | . | files | true\n")
+    monkeypatch.setattr(doneguard, "installed_version", lambda: "0.3.0")
+    monkeypatch.setattr(doneguard, "latest_version", lambda: "0.10.0")
+    doneguard.doctor(tmp_path)
+    assert "↑ doneguard 0.10.0 is out" in capsys.readouterr().out
+    monkeypatch.setattr(doneguard, "latest_version", lambda: "0.3.0")
+    doneguard.doctor(tmp_path)
+    assert "is out" not in capsys.readouterr().out

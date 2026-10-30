@@ -2,11 +2,15 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-30
+
 ### Added
 
 - **Receipt:** when everything passes, Claude Code shows what doneguard checked under the agent's answer: `doneguard: ✓ cheats · tsc · vitest (3.1 s)`.
 - `doneguard report [--base REF] [files]`: the checks as markdown, for a PR comment (`| gh pr comment --body-file -`) or a GitHub Actions summary (`>> $GITHUB_STEP_SUMMARY`).
 - A "checked by doneguard" README badge; `init` points to it.
+- `doneguard init --update`: adds the checks a new version detects to an existing `.doneguard.conf`, each where it works, without touching your lines.
+- `doneguard doctor` says when a newer doneguard is out (one request to pypi.org, only when you run it).
 
 ## [0.3.0] - 2026-10-30
 
@@ -46,7 +50,8 @@
 - `doneguard check` for CI and git hooks, and `doneguard stats`.
 - Detection for TypeScript, ESLint, Vitest, Jest, Python (ruff, pytest), Rust, Go, Java (Maven), PHP and Swift.
 
-[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/abranchesia/doneguard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/abranchesia/doneguard/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/abranchesia/doneguard/releases/tag/v0.2.0
 [0.1.0]: https://github.com/abranchesia/doneguard/commit/42ef2b2
