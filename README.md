@@ -105,10 +105,18 @@ sequenceDiagram
 From [PyPI](https://pypi.org/project/doneguard/):
 
 ```bash
-uv tool install doneguard
-# or: pipx install doneguard
-doneguard --help
+uv tool install doneguard   # or: pipx install doneguard
+doneguard init --global
 ```
+
+That's all, for every project, from then on.
+- **What `init --global` does:** it hooks doneguard into your agents' user config, for example `~/.claude/settings.json`. The first time an agent opens a git repo, doneguard writes that repo's `.doneguard.conf`, keeps it out of git (`.git/info/exclude`), and checks every stop.
+- **What's on in that file:** the quick checks (types, lint, tests that need no database, [no shortcuts](#no-shortcuts)). [Test databases](#tests-that-need-a-database) and [e2e tests](#end-to-end-tests-with-evidence) are there too, commented out: remove their `#` to turn them on.
+- **For a team:** `doneguard init` in a project writes a `.doneguard.conf` to commit instead, as in [Add it to an existing project](#add-it-to-an-existing-project).
+- **Where it's hooked:**
+  - Claude Code (Cursor and Devin run its hooks too), Codex, Gemini CLI, Copilot, Antigravity and Kiro CLI V3.
+  - Codex asks you to approve the hooks once with `/hooks`.
+  - A project hooked on its own keeps its hooks, and the global ones step aside there.
 
 - **Try it without installing:** `uvx doneguard init`, then `uvx doneguard check`. The agent hooks call `doneguard` by name, so for them it has to be installed and on your `PATH`.
 - **Shell can't find `doneguard`?** Run `uv tool update-shell` (or `pipx ensurepath`) and open a new terminal.
@@ -441,6 +449,7 @@ A tool that isn't installed, Docker that isn't running, missing browsers, or a c
 | Command | What it does |
 |---|---|
 | `doneguard init [--update] [agents…]` | Detect the stack, write `.doneguard.conf` (if it has no checks yet; otherwise list what's new, and with `--update` add it) and add the hooks to the agents found here, or to the ones you name (`all` for every one). Safe to run again. |
+| `doneguard init --global [agents…]` | Hook into your agents for every project, in their user config. Each git repo then gets a `.doneguard.conf`, kept out of git, on its first session: quick checks on, databases and e2e commented out. Safe to run again. |
 | `doneguard check [--base REF] [files…]` | Run the checks on the given files, on your git changes, or on everything changed since the branch left `REF`, with a progress line per check. Exit 1 on failure. |
 | `doneguard report [--base REF] [files…]` | The same checks, written as markdown for a pull request comment or a CI summary. Exit 1 on failure. |
 | `doneguard doctor` | What the checks here need (tools, Docker, Playwright browsers, hooks) and what's missing. Exit 1 if a check would be skipped. |

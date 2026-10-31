@@ -6,6 +6,9 @@ Usage:
                            detect the stack, write .doneguard.conf and hook into your agents
                            (default: the agents found here; or name them, or "all"). With a
                            .doneguard.conf already there, --update adds the checks it doesn't have
+  doneguard init --global [agents]
+                           hook into your agents for every project, once per machine: each git repo
+                           gets a .doneguard.conf, kept out of git, on its first session
   doneguard check [--base REF] [files]
                            run the checks on the given files (default: the git changes, or everything
                            changed since the branch left REF); exit 1 on failure
@@ -133,7 +136,9 @@ def load_conf(root):
 
 
 def find_root(path):
-    return next((d for d in [path, *path.parents] if (d / CONF).exists()), path)
+    """The nearest folder with a .doneguard.conf, else the git repo's, else `path`."""
+    up = [path, *path.parents]
+    return next((d for d in up if (d / CONF).exists()), None) or next((d for d in up if (d / ".git").exists()), path)
 
 
 def sh(cmd, cwd, extra=None, timeout=TIMEOUT):
@@ -621,16 +626,24 @@ def mark(sid, roots):
             pass
 
 
-def hook(event, data):
+def hook(event, data, everywhere=False):
+    """`everywhere`: called from your user config (init --global), which leaves alone the projects hooked on their own."""
     agent = agent_of(data)
     sid = data.get("conversationId") or data.get("conversation_id") or data.get("session_id") or data.get("sessionId") or "default"
     sid = re.sub(r"[^\w-]", "_", str(sid))
-    STATE.mkdir(parents=True, exist_ok=True)
-    since_f, blocks_f, flagged_f = STATE / f"{sid}.since", STATE / f"{sid}.blocks", STATE / f"{sid}.flagged"
     env_root = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("GEMINI_PROJECT_DIR") or os.environ.get("DEVIN_PROJECT_DIR")
     paths = data.get("workspacePaths") or data.get("workspace_roots") or [env_root or data.get("cwd") or os.getcwd()]
     roots = sorted({find_root(Path(p).resolve()) for p in paths})
+    if everywhere:
+        roots = [r for r in roots if not hooked_here(r, agent)]
+        for r in roots:
+            if not (r / CONF).exists() and (r / ".git").exists():
+                auto_conf(r)
     roots = [r for r in roots if (r / CONF).exists()]
+    if everywhere and not roots:  # not a project, or its own hook runs: touch nothing, it may be running right now
+        return reply(agent)
+    STATE.mkdir(parents=True, exist_ok=True)
+    since_f, blocks_f, flagged_f = STATE / f"{sid}.since", STATE / f"{sid}.blocks", STATE / f"{sid}.flagged"
     if event == "start" or not since_f.exists():
         mark(sid, roots)
         return reply(agent)
@@ -942,6 +955,7 @@ def doctor(root):
     hooked = [a for a, (f, _, _) in HOOKS.items() if "doneguard" in read(root / f)]
     hooked += [a for a, f in (("kiro", ".kiro/hooks/doneguard.json"), ("opencode", ".opencode/plugins/doneguard.js")) if (root / f).exists()]
     hooked += ["aider"] * ("doneguard" in read(root / ".aider.conf.yml"))
+    hooked += [f"{a} (every project)" for a in AGENTS if a not in hooked and hooked_everywhere(a)]
     say(bool(hooked), "hooked into " + (", ".join(hooked) or "no agent"), "run doneguard init")
     print(f"\n{len(bad)} problem(s)." if bad else "\nAll set.")
     return 1 if bad else 0
@@ -976,6 +990,29 @@ AGENTS = {
     "aider": (("aider",), ".aider.conf.yml"),
 }
 IMPORTS_CLAUDE = {"cursor", "copilot", "devin"}  # they also run the hooks in .claude/settings*.json
+IMPORTS_CLAUDE_GLOBAL = {"cursor", "devin"}  # ...and in ~/.claude/settings.json (Copilot doesn't)
+
+
+def global_hooks(agent):
+    """(the agent's folder in your home, the file in it that holds hooks for every project), or None."""
+    home = Path.home()
+    return {
+        "claude": (home / ".claude", "settings.json"),
+        "codex": (Path(os.environ.get("CODEX_HOME") or home / ".codex"), "hooks.json"),
+        "gemini": (home / ".gemini", "settings.json"),
+        "cursor": (home / ".cursor", "hooks.json"),
+        "copilot": (Path(os.environ.get("COPILOT_HOME") or home / ".copilot"), "hooks/doneguard.json"),
+        "antigravity": (home / ".gemini" / "config", "hooks.json"),
+        "devin": (home / ".config" / "devin", "config.json"),
+        "kiro": (home / ".kiro", "hooks/doneguard.json"),
+    }.get(agent)
+
+
+def hooked_here(root, agent):
+    """Whether the project has its own doneguard hook for this agent: then the copy in your user config steps aside."""
+    files = [HOOKS[agent][0]] if agent in HOOKS else [".kiro/hooks/doneguard.json"] if agent == "kiro" else []
+    files += [".claude/settings.local.json", ".claude/settings.json"] * (agent == "claude" or agent in IMPORTS_CLAUDE)
+    return any("doneguard" in read(root / f) for f in files)
 KIRO = {"version": "v1", "hooks": [
     {"name": "doneguard-start", "trigger": "SessionStart", "action": {"type": "command", "command": START}},
     {"name": "doneguard-verify", "trigger": "Stop", "action": {"type": "command", "command": VERIFY}, "timeout": 600},
@@ -1010,12 +1047,22 @@ def edit_json(path, change):
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def install(root, agent):
-    """Register the hooks in the agent's own config. Returns (file, note)."""
-    if agent in HOOKS:
-        file, keys, events = HOOKS[agent]
+def install(root, agent, everywhere=False):
+    """Register the hooks in the agent's own config: the project's or, with `everywhere`, your user config, for every
+    project. Returns (file, note)."""
+    if agent in HOOKS or agent == "kiro":
+        file, keys, events = HOOKS.get(agent, (".kiro/hooks/doneguard.json", None, KIRO))
+        path = root / file
+        if everywhere:  # `--global` lets the project's own hook, if it has one, do the work
+            folder, name = global_hooks(agent)
+            path, keys = folder / name, ["hooks"] if agent == "devin" else keys
+            events = json.loads(json.dumps(events).replace(START, START + " --global").replace(VERIFY, VERIFY + " --global"))
+            file = str(path).replace(str(Path.home()), "~", 1)
 
         def change(data):
+            if keys is None:  # Kiro: the file is ours
+                data.update(events)
+                return
             if agent in ("cursor", "copilot"):
                 data.setdefault("version", 1)
             node = data
@@ -1026,11 +1073,8 @@ def install(root, agent):
                 if "doneguard" not in json.dumps(entries):
                     entries.append(entry)
 
-        edit_json(root / file, change)
-        return file, "approve it once with /hooks in Codex" if agent == "codex" else ""
-    if agent == "kiro":
-        edit_json(root / ".kiro/hooks/doneguard.json", lambda data: data.update(KIRO))
-        return ".kiro/hooks/doneguard.json", ""
+        edit_json(path, change)
+        return file, {"codex": "approve it once with /hooks in Codex", "kiro": "Kiro CLI V3: kiro-cli --v3" if everywhere else ""}.get(agent, "")
     if agent == "opencode":
         (root / ".opencode/plugins").mkdir(parents=True, exist_ok=True)
         (root / ".opencode/plugins/doneguard.js").write_text(OPENCODE)
@@ -1078,8 +1122,62 @@ def add_checks(root, detected, new):
     (root / CONF).write_text("\n".join(out) + "\n")
 
 
+def hooked_everywhere(agent):
+    """The user config file where doneguard is hooked for every project, or None."""
+    where = global_hooks(agent)
+    return where and "doneguard" in read(where[0] / where[1]) and str(where[0] / where[1]).replace(str(Path.home()), "~", 1)
+
+
+def auto_conf(root):
+    """For a git repo nobody set up, hooked with init --global: write the .doneguard.conf init would, kept out of git
+    (.git/info/exclude), with the quick checks on and the databases, the tests that need them and e2e commented out."""
+    checks = detect(root)
+    if not checks:
+        return  # no stack yet: the next session looks again
+    quick = next((i for i, c in enumerate(checks) if c[2].partition("=")[0] in SERVICES), len(checks))
+    off = [c for i, c in enumerate(checks) if i >= quick or c[2] == "e2e"]
+    (root / CONF).write_text(HEADER + "# Written for this repo by doneguard init --global, kept out of git. Off until you remove their #:\n"
+                             "# throwaway databases, the tests that need them, and e2e.\n"
+                             + "".join("# " * (c in off) + ln + "\n" for c, ln in zip(checks, table(checks))))
+    exclude = root / (git(root, "rev-parse", "--git-path", "info/exclude") or ".git/info/exclude").strip()
+    have = read(exclude)
+    if CONF not in have.split():
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text(have + ("\n" if have and not have.endswith("\n") else "") + CONF + "\n")
+
+
+def init_global(names):
+    """Hook the agents for every project, in your user config: after this, nothing to run per project."""
+    names = [a for a in AGENTS if global_hooks(a)] if names == ["all"] else names
+    names = names or [a for a in AGENTS if global_hooks(a) and (any(shutil.which(b) for b in AGENTS[a][0]) or global_hooks(a)[0].exists())] or ["claude"]
+    other = sorted(set(names) - {a for a in AGENTS if global_hooks(a)})
+    if other:
+        print(f"error: {', '.join(other)} can't be hooked for every project; run doneguard init in each project for them.")
+        return 2
+    claude = "claude" in names or hooked_everywhere("claude")
+    print("hooked for every project:")
+    for agent in names:
+        if agent in IMPORTS_CLAUDE_GLOBAL and claude:
+            print(f"  {agent:<12} runs the Claude Code hooks in ~/.claude/settings.json too, nothing to add")
+            continue
+        try:
+            file, note = install(Path.home(), agent, everywhere=True)
+        except ValueError:
+            print(f"  {agent:<12} skipped: its config is not valid JSON, fix it and run init --global again")
+            continue
+        print(f"  {agent:<12} {file}" + (f" ({note})" if note else ""))
+    print(f"Nothing to run per project now. The first session in a git repo writes its {CONF}, kept out of git, with the\n"
+          "quick checks on (types, lint, tests that need no database, no shortcuts) and the databases and e2e off until\n"
+          "you remove their #. doneguard init in a project writes one to commit instead.")
+    if not shutil.which("doneguard"):
+        print("warning: `doneguard` is not on your PATH, so the hooks can't run. Install it: uv tool install doneguard")
+    return 0
+
+
 def init(root, names=()):
     update = "--update" in names
+    if "--global" in names:
+        return init_global([n for n in names if n != "--global"])
     names = [n for n in names if n != "--update"]
     names = list(AGENTS) if names == ["all"] else names
     names = names or [a for a, (bins, hint) in AGENTS.items() if any(shutil.which(b) for b in bins) or (root / hint).exists()] or ["claude"]
@@ -1118,6 +1216,9 @@ def init(root, names=()):
     for agent in names:
         if agent in IMPORTS_CLAUDE and claude_hooked:
             print(f"  {agent:<12} runs the Claude Code hooks too, nothing to add")
+            continue
+        if hooked_everywhere(agent) or (agent in IMPORTS_CLAUDE_GLOBAL and hooked_everywhere("claude")):
+            print(f"  {agent:<12} hooked for every project ({hooked_everywhere(agent) or hooked_everywhere('claude')}), nothing to add")
             continue
         try:
             file, note = install(root, agent)
@@ -1184,7 +1285,7 @@ def main(argv=None):
             data = json.load(sys.stdin)
         except ValueError:
             data = {}
-        return hook(cmd, data if isinstance(data, dict) else {})
+        return hook(cmd, data if isinstance(data, dict) else {}, "--global" in argv[1:])
     if cmd == "init":
         return init(Path.cwd().resolve(), argv[1:])
     if cmd == "stats":

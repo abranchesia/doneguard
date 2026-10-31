@@ -13,7 +13,8 @@ import doneguard
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(doneguard, "STATE", tmp_path / "state")
     monkeypatch.setattr(doneguard, "LOG", tmp_path / "log.jsonl")
-    for env in ("CLAUDE_PROJECT_DIR", "GEMINI_PROJECT_DIR", "DEVIN_PROJECT_DIR"):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # init --global writes there, and init reads it
+    for env in ("CLAUDE_PROJECT_DIR", "GEMINI_PROJECT_DIR", "DEVIN_PROJECT_DIR", "CODEX_HOME", "COPILOT_HOME"):
         monkeypatch.delenv(env, raising=False)
 
 
@@ -508,6 +509,57 @@ def test_init_update_puts_each_new_check_where_it_works(tmp_path, capsys):
     assert (tmp_path / doneguard.CONF).read_text().startswith("# my checks\n")
     doneguard.init(tmp_path, ["--update", "claude"])
     assert len(doneguard.load_conf(tmp_path)) == 5
+
+
+def test_a_repo_nobody_set_up_gets_a_conf_with_the_quick_checks_on(tmp_path):
+    root = tmp_path / "p"
+    root.mkdir()
+    repo(root, {"package.json": json.dumps({"dependencies": {"pg": "8"}, "devDependencies": {"vitest": "3", "@playwright/test": "1", "typescript": "5", "eslint": "9"}}),
+                "tsconfig.json": "{}", "playwright.config.ts": "export default { webServer: {} };\n"})
+    doneguard.auto_conf(root)
+    assert [r[2] for r in doneguard.load_conf(root)] == ["cheats", "filter", "files"]  # tsc, eslint
+    off = [ln for ln in (root / doneguard.CONF).read_text().splitlines() if ln.startswith("# *")]
+    assert [ln.split(" | ")[2].strip() for ln in off] == ["postgres", "files", "e2e"]  # the database, vitest on it, Playwright
+    assert doneguard.CONF in (root / ".git/info/exclude").read_text().split()
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=True).stdout == ""
+
+
+def test_global_hooks_check_a_repo_nobody_set_up(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "p"
+    root.mkdir()
+    repo(root, {"pyproject.toml": "", "tests/test_a.py": "def test_a(): pass\n"})
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(root / "tests"))  # the agent started in a subfolder
+    doneguard.hook("start", {"session_id": "g1"}, everywhere=True)
+    assert (root / doneguard.CONF).exists()
+    (root / "tests/test_a.py").write_text("import pytest\n@pytest.mark.skip\ndef test_a(): pass\n")
+    os.utime(root / "tests/test_a.py", (time.time() + 5, time.time() + 5))
+    doneguard.hook("verify", {"session_id": "g1"}, everywhere=True)
+    assert "@pytest.mark.skip" in json.loads(capsys.readouterr().out)["reason"]
+
+
+def test_the_global_hook_steps_aside_where_the_project_has_its_own(tmp_path, monkeypatch, capsys):
+    root = project(tmp_path / "p", "* | . | command | false\n", [".claude/settings.local.json"])
+    (root / ".claude/settings.local.json").write_text('{"hooks": {"Stop": [{"hooks": [{"command": "doneguard verify"}]}]}}')
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(root))
+    for event in ("start", "verify"):
+        assert doneguard.hook(event, {"session_id": "g2"}, everywhere=True) == 0
+    assert capsys.readouterr().out == "" and not doneguard.STATE.exists()  # the project's own hook may be running: hands off
+
+
+def test_init_global_hooks_every_project_once(tmp_path, capsys):
+    home = tmp_path / "home"
+    assert doneguard.init(tmp_path, ["--global", "claude", "cursor", "codex", "devin"]) == 0
+    claude = json.loads((home / ".claude/settings.json").read_text())
+    assert claude["hooks"]["Stop"][0]["hooks"][0]["command"] == "doneguard verify --global"
+    assert json.loads((home / ".codex/hooks.json").read_text())["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "doneguard start --global"
+    assert not (home / ".cursor").exists() and not (home / ".config/devin").exists()  # they run ~/.claude/settings.json too
+    doneguard.init(tmp_path, ["--global", "claude"])
+    assert len(json.loads((home / ".claude/settings.json").read_text())["hooks"]["Stop"]) == 1
+    (tmp_path / "tsconfig.json").write_text("{}")
+    capsys.readouterr()
+    doneguard.init(tmp_path, ["claude"])  # in a project: the config, no second hook
+    assert "claude       hooked for every project (~/.claude/settings.json)" in capsys.readouterr().out
+    assert not (tmp_path / ".claude/settings.local.json").exists()
 
 
 def test_init_update_keeps_one_cheats_line_whatever_groups_it_lists(tmp_path, capsys):

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`doneguard init --global`:** install and forget. It hooks doneguard into your agents' user config (Claude Code, Codex, Gemini CLI, Copilot, Antigravity, Kiro CLI V3; Cursor and Devin run Claude Code's), once per machine.
+  - The first session in a git repo writes that repo's `.doneguard.conf` and keeps it out of git (`.git/info/exclude`). The quick checks are on; databases, the tests that need them and e2e are commented out.
+  - Projects hooked on their own keep their hooks, and the global ones step aside there, so nothing runs twice.
+  - `init` in a project no longer adds hooks for an agent that is hooked for every project.
+
 ## [0.5.0] - 2026-10-30
 
 ### Added
