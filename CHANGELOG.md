@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-31
+
 ### Added
 
 - **`doneguard init --global`:** install and forget. It hooks doneguard into your agents' user config (Claude Code, Codex, Gemini CLI, Copilot, Antigravity, Kiro CLI V3; Cursor and Devin run Claude Code's), once per machine.
@@ -68,7 +70,8 @@
 - `doneguard check` for CI and git hooks, and `doneguard stats`.
 - Detection for TypeScript, ESLint, Vitest, Jest, Python (ruff, pytest), Rust, Go, Java (Maven), PHP and Swift.
 
-[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/abranchesia/doneguard/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/abranchesia/doneguard/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/abranchesia/doneguard/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/abranchesia/doneguard/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/abranchesia/doneguard/compare/v0.2.0...v0.3.0
