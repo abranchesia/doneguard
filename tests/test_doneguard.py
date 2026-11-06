@@ -427,6 +427,15 @@ def test_cheats_are_flagged_once_then_only_reported(tmp_path):
     assert fails == [] and notes[0].startswith("cheats: ")
 
 
+def test_deleting_a_test_is_flagged_when_nothing_else_changed(tmp_path):
+    root = project(tmp_path / "p", "* | . | cheats | -\n")
+    ref = repo(root, {"src/cart.ts": "export const a = 1;\n", "tests/test_foo.py": "def test_a(): pass\n"})
+    (root / "tests/test_foo.py").unlink()
+    for files in (doneguard.changed_since(root, time.time()), doneguard.git_changed(root, ref)):  # hook, check
+        ((_, report),), ran, _ = doneguard.run_checks(root, files, ref=ref, flagged=set())
+        assert ran == 1 and "tests/test_foo.py  deleted" in report
+
+
 def test_cheat_groups_can_be_turned_off(tmp_path):
     root = project(tmp_path / "p", "* | . | cheats | skips\n")
     ref = repo(root, {"a.ts": ""})

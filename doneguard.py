@@ -436,9 +436,11 @@ def run_checks(root, files, say=None, ref=None, known=None, flagged=None):
     try:
         for globs, folder, mode, cmd in load_conf(root):
             groups = {}
-            for f in files:
+            # cheats also see files deleted since `ref`: the hook's mtime scan can't, and a deleted test may be the only change
+            gone = (git(root, "diff", "--name-only", "--relative", "--diff-filter=D", ref) or "").splitlines() if mode == "cheats" and ref else []
+            for f in dict.fromkeys(files + [str(root / p) for p in gone]):
                 rel = os.path.relpath(f, root)
-                if rel.startswith("..") or not os.path.isfile(f) or not any(fnmatch.fnmatch(rel, g.strip()) for g in globs.split(",")):
+                if rel.startswith("..") or not (os.path.isfile(f) or mode == "cheats") or not any(fnmatch.fnmatch(rel, g.strip()) for g in globs.split(",")):
                     continue
                 base = nearest(f, root, folder[1:]) if folder.startswith("@") else (root / folder).resolve()
                 if base:
